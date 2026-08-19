@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block titre %}{{ nb_bonus_mot|capitalize }} de plus{% endblock %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">{{ p.nom_fictif }} &middot; {{ p.lieu }}</p>
+  <h1>Voulez-vous en dire plus ?</h1>
+  <p>{{ nb_bonus_mot|capitalize }} questions supplémentaires, et votre chronique sera réécrite en plus
+     riche. Les mariés auront davantage à deviner.</p>
+  <p class="discret">Vous pouvez aussi vous arrêter là : ce que vous avez donné
+     suffit.</p>
+  <a class="action" href="/bonus/{{ p.uuid }}/questions">{{ nb_bonus_mot|capitalize }} questions de plus</a>
+  <a class="action sobre" href="/fin">J'en ai assez dit</a>
+</div>
+{% endblock %}

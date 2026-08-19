@@ -1,0 +1,62 @@
+# Exemple de `config.yaml` — à déposer dans un dossier de projet sur le volume,
+# par exemple /data/projets/2026-08-repetition/config.yaml
+#
+# Ce fichier n'est PAS lu depuis le dépôt. Il n'est là qu'à titre d'exemple, et
+# rien ne le recopie automatiquement : une copie faite une fois puis jamais
+# rafraîchie a déjà fait tourner l'application des heures sur une configuration
+# périmée, sans message d'erreur (EX-ARC-19).
+#
+# ÉTAT — seul le bloc `projet:` est lu à ce jour. Les autres blocs sont donnés
+# pour mémoire, conformément à la section 4.6 du cahier des charges ; ils seront
+# consommés à l'étape 2. En cas de divergence, c'est la section 4.6 qui fait foi.
+
+projet:
+  identifiant: 2026-08-repetition
+  nom: "Répétition générale"
+  date: 2026-09-05
+  # `preparation` ou `production`, IMMUABLE ensuite (EX-PRJ-04, EX-PRJ-05).
+  # Ce champ commande le refus des opérations destructives (EX-PRJ-06) : il n'a
+  # volontairement aucune valeur par défaut, parce qu'une valeur par défaut
+  # serait forcément la mauvaise dans un sens ou dans l'autre.
+  type: preparation
+  langue: fr
+
+# --- Blocs à venir, étape 2 -------------------------------------------------
+
+# Le mot de passe d'accès n'est pas haché : il est imprimé sur des cartons et
+# l'administrateur doit pouvoir le relire (EX-SEC-09). Un mot simple en
+# minuscules, saisissable au doigt dans une lumière tamisée (EX-AUTH-07).
+acces:
+  mot_de_passe: "a-definir"
+  mot_de_passe_maries: "a-definir"      # QR code dédié (EX-AUTH-20)
+
+# Les quotas sont des ALLOCATIONS. Aucun compteur de consommation n'est stocké :
+# les consommations se calculent depuis le journal (EX-GEN-07, EX-IA-21).
+quotas:
+  generations_par_personne: 3
+  photo_par_personne: 1
+  modifications_photo: 3
+  photos_de_table: 5
+  uploads_table: 10
+  suppressions_table: 5
+
+ia:
+  # Le modèle est un paramètre, pas une constante de code (EX-IA-20).
+  modele: claude-sonnet-5
+  # Borne, jamais facturée. Le compteur de jetons de sortie est sans rapport
+  # avec le nombre de mots visibles : raccourcir le portrait ne prévient pas la
+  # troncature, seul un plafond large le fait (EX-IA-34).
+  jetons_max: 8000
+  # Coupe-circuit de coût. ATTENTION : le plafond réel de l'API est propre au
+  # COMPTE, pas au service — des essais sur le banc consomment le même budget
+  # et les mêmes limites de débit que la production (EX-IA-18).
+  plafond_appels: 500
+
+tables:
+  nombre: 10
+
+# Table de test test_01 à test_10, qui reste ACTIVE dans le projet de
+# production pour le test de fumée du jour J (EX-PRJ-10, EX-TST-01).
+table_test:
+  active: true
+  utilisateurs: 10

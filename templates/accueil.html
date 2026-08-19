@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Banc d'essai</p>
+  <h1>Le Conseil vous attend</h1>
+  <p>Sept questions sur vous. Une chronique en retour, dans un monde qui n'est
+     pas tout à fait le vôtre.</p>
+  <p class="discret">Votre nom ne sera jamais écrit dans le texte. Il servira
+     seulement aux mariés, plus tard, pour vous reconnaître.</p>
+
+  <form method="post" action="/questionnaire">
+    <h2>Qui êtes-vous ?</h2>
+    <p><input type="text" name="prenom" placeholder="Prénom" maxlength="40" required
+              autocomplete="given-name"></p>
+    <p><input type="text" name="nom" placeholder="Nom" maxlength="40" required
+              autocomplete="family-name"></p>
+    <input type="hidden" name="genre" id="champ-genre" value="">
+    <p class="exemple" style="margin:1.2rem 0 0.6rem">Le personnage sera écrit…</p>
+    <button type="button" class="choix genre" data-valeur="masculin">Au masculin</button>
+    <button type="button" class="choix genre" data-valeur="feminin">Au féminin</button>
+    <button type="button" class="choix genre" data-valeur="">Peu importe</button>
+
+    <button class="action" type="submit">Commencer</button>
+  </form>
+</div>
+<script>
+document.querySelectorAll(".genre").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll(".genre").forEach(function (x) {
+      x.classList.remove("retenu");
+    });
+    b.classList.add("retenu");
+    document.getElementById("champ-genre").value = b.dataset.valeur;
+  });
+});
+</script>
+{% endblock %}

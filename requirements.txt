@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+python-multipart==0.0.20
+httpx==0.28.1
+pyyaml==6.0.2
+
+# EX-GEN-04 — affichage en heure locale (Europe/Zurich). Windows n'a pas de
+# base de fuseaux système, et les images Debian « slim » n'en embarquent pas :
+# sans ce paquet, ZoneInfo lève ZoneInfoNotFoundError. Vérifié au démarrage
+# par config.zone_affichage().
+tzdata==2025.1

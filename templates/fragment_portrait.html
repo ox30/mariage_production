@@ -1,0 +1,78 @@
+{% if p.etat == "brouillon" %}
+  <p class="surtitre">{{ p.lieu }}</p>
+  <h1>Il reste {{ nb_bonus_mot }} questions</h1>
+  <p>Vos six premières réponses sont enregistrées. Votre chronique s'écrira dès
+     que vous aurez terminé — ou tout de suite, si vous préférez.</p>
+  <a class="action" href="/bonus/{{ p.uuid }}/questions">Continuer</a>
+
+{% elif p.etat in ("en_attente", "en_cours") %}
+  <div hx-get="/portrait/{{ p.uuid }}/etat" hx-trigger="every 2s" hx-target="#zone-portrait">
+    <p class="surtitre">{{ p.lieu }}</p>
+    <h1>On vous attendait ici</h1>
+    <p>Le Conseil vous a convoqué en <strong>{{ p.lieu }}</strong>. L'ennemi est
+       proche, et l'on manque de bras.</p>
+    <div class="attente">
+      <p>Votre chronique s'écrit<span class="points"></span></p>
+      <p class="discret">Une dizaine de secondes.</p>
+    </div>
+  </div>
+
+{% elif p.etat == "echouee" %}
+  <p class="surtitre">{{ p.lieu }}</p>
+  <h1>Le scribe a manqué sa plume</h1>
+  <p>Vos réponses sont enregistrées, rien n'est perdu. La chronique s'écrira
+     plus tard.</p>
+  <div class="alerte"><strong>Détail technique :</strong> {{ p.derniere_erreur }}</div>
+  <p class="discret">Cet échec ne vous a rien coûté : vos réécritures restent
+     entières.</p>
+  <form method="post" action="/portrait/{{ p.uuid }}/regenerer">
+    <button class="action" type="submit">Réessayer</button>
+  </form>
+  <p><a class="action sobre" href="/fin">Terminer quand même</a></p>
+
+{% else %}
+  <p class="surtitre">{{ p.lieu }}</p>
+  <div class="parchemin">
+    <p class="nom-fictif">{{ p.nom_fictif }}</p>
+    <p class="appartenance">{{ p.peuple }} &middot; {{ p.lieu }}</p>
+    <div class="texte-portrait">
+      {% for paragraphe in p.portrait.split("\n") if paragraphe.strip() %}
+        <p>{{ paragraphe }}</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <form method="post" action="/portrait/{{ p.uuid }}/valider">
+    <button class="action" type="submit">C'est bien moi</button>
+  </form>
+
+  {% if p.nb_generations < max_generations %}
+    <form method="post" action="/portrait/{{ p.uuid }}/regenerer">
+      <input type="hidden" name="motif" id="champ-motif" value="">
+      <p class="discret" style="margin:1.4rem 0 0.5rem">
+        Quelque chose ne va pas ? (facultatif)
+      </p>
+      {% for m in motifs %}
+        <button type="button" class="choix motif" data-valeur="{{ m.cle }}">{{ m.libelle }}</button>
+      {% endfor %}
+      <button class="action sobre" type="submit">
+        Réécrivez-moi ça
+        ({{ max_generations - p.nb_generations }} restant{{ "s" if max_generations - p.nb_generations > 1 else "" }})
+      </button>
+    </form>
+    <script>
+    document.querySelectorAll(".motif").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var deja = b.classList.contains("retenu");
+        document.querySelectorAll(".motif").forEach(function (x) {
+          x.classList.remove("retenu");
+        });
+        if (!deja) { b.classList.add("retenu"); }
+        document.getElementById("champ-motif").value = deja ? "" : b.dataset.valeur;
+      });
+    });
+    </script>
+  {% else %}
+    <p class="discret">Vous avez épuisé vos réécritures. Cette chronique est la vôtre.</p>
+  {% endif %}
+{% endif %}

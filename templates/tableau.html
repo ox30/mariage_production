@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block titre %}Tableau{% endblock %}
+{% block corps %}
+<div class="enveloppe" style="max-width:52rem">
+  <p class="surtitre">Banc d'essai</p>
+  <h1>Ce que ça coûte</h1>
+
+  <div class="bilan">
+    <div><span class="valeur chiffre">{{ participations|length }}</span>
+         <span class="etiquette">participations</span></div>
+    <div><span class="valeur chiffre">{{ duree_moyenne or "—" }}<small> s</small></span>
+         <span class="etiquette">attente moyenne</span></div>
+    <div><span class="valeur chiffre">{{ duree_max or "—" }}<small> s</small></span>
+         <span class="etiquette">attente maximale</span></div>
+    <div><span class="valeur chiffre">{{ jetons_entree }}</span>
+         <span class="etiquette">jetons entrée</span></div>
+    <div><span class="valeur chiffre">{{ jetons_sortie }}</span>
+         <span class="etiquette">jetons sortie</span></div>
+    <div><span class="valeur chiffre">{{ echecs }}</span>
+         <span class="etiquette">échecs</span></div>
+    <div><span class="valeur chiffre">{{ fuites }}</span>
+         <span class="etiquette">fuites de noms</span></div>
+  </div>
+
+  <p class="discret">Multipliez les jetons par cent participants et trois
+     générations pour estimer la soirée réelle. Les tarifs figurent sur la
+     console Anthropic ; ils changent, ne les codez pas en dur.</p>
+
+  <p><a class="action sobre" href="/tableau/export.json">Export JSON complet</a></p>
+
+  <h2>Détail</h2>
+  <table>
+    <tr>
+      <th>Personne</th><th>Nom fictif</th><th>Peuple</th><th>Lieu</th>
+      <th>Ét.</th><th>Gén.</th><th class="chiffre">s</th><th>État</th>
+    </tr>
+    {% for p in participations %}
+    <tr>
+      <td>{{ p.prenom }} {{ p.nom }}</td>
+      <td>{{ p.nom_fictif or "—" }}</td>
+      <td>{{ p.peuple or "—" }}</td>
+      <td>{{ p.lieu_affiche }}</td>
+      <td class="chiffre">{{ p.etage }}</td>
+      <td class="chiffre">{{ p.nb_generations }}</td>
+      <td class="chiffre">{{ p.duree_s or "—" }}</td>
+      <td>{{ p.etat }}{% if p.derniere_erreur %} <span class="discret">({{ p.derniere_erreur[:60] }})</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <h2>Répartition sur les lieux</h2>
+  <p class="discret">Le lieu le moins peuplé, tirage au sort en cas d'égalité.
+     Les écarts ne doivent jamais dépasser une personne. Le décompte porte sur
+     la <strong>région</strong> : « Minas Tirith / les ruines d'Osgiliath »
+     compte pour Minas Tirith, puisque c'est la région qui fait le chapitre.</p>
+  <table>
+    {% for lieu, groupe in participations|groupby("lieu") %}
+    <tr><td>{{ lieu }}</td><td class="chiffre">{{ groupe|length }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

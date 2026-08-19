@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block titre %}Votre chronique{% endblock %}
+{% block corps %}
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<div class="enveloppe">
+  <div id="zone-portrait">
+    {% include "fragment_portrait.html" %}
+  </div>
+</div>
+{% endblock %}

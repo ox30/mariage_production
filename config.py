@@ -127,6 +127,7 @@ class Projet:
     dossier_logs: pathlib.Path
     dossier_instantanes: pathlib.Path
     est_developpement: bool
+    volume_monte: bool
     configuration: dict
 
     @property
@@ -310,6 +311,7 @@ def _projet_du_volume(racine: pathlib.Path, identifiant: str) -> Projet:
         dossier_logs=dossier / "logs",
         dossier_instantanes=dossier / "instantanes",
         est_developpement=False,
+        volume_monte=True,
         configuration=configuration,
     )
 
@@ -339,6 +341,7 @@ def _projet_de_developpement(racine: pathlib.Path) -> Projet:
         dossier_logs=dossier / "logs",
         dossier_instantanes=dossier / "instantanes",
         est_developpement=True,
+        volume_monte=racine != RACINE_DEVELOPPEMENT,
         configuration={},
     )
 
@@ -409,12 +412,28 @@ def resume_demarrage() -> str:
         f"fuseau affiché  : {nom_zone_affichage()}"
         f"  ({en_heure_locale(maintenant()):%Y-%m-%d %H:%M})",
     ]
-    if p.est_developpement:
+    if p.est_developpement and not p.volume_monte:
+        # Aucun volume : la base vit dans le conteneur et disparaît au prochain
+        # redéploiement — un simple ajout de variable suffit. C'est le défaut
+        # du 17 août, cette fois annoncé.
         lignes.append(
-            "ATTENTION       : repli de développement — aucun volume "
-            f"persistant sur {racine_configuree()}. Les données vivent dans "
-            f"{RACINE_DEVELOPPEMENT}, hors du dépôt. Poser EXIGER_VOLUME=1 en "
-            "ligne pour interdire ce repli (EX-ARC-17)."
+            "DANGER          : aucun volume persistant sur "
+            f"{racine_configuree()}. La base vit dans le conteneur et "
+            "DISPARAÎTRA au prochain redéploiement. Acceptable en local, "
+            "jamais en ligne. Monter un volume sur "
+            f"{racine_configuree()}, puis poser EXIGER_VOLUME=1 (EX-ARC-17)."
+        )
+    elif p.est_developpement:
+        # Le volume est bien là, mais aucun projet n'est désigné. Les données
+        # survivent ; elles s'écrivent simplement dans un projet anonyme, et
+        # `questions.yaml` vient du dépôt au lieu du volume (EX-PRJ-12).
+        lignes.append(
+            "ATTENTION       : volume monté, mais "
+            f"{racine_configuree() / POINTEUR} est absent. Les données "
+            f"s'écrivent dans le projet anonyme {p.dossier} — elles survivent "
+            "au redéploiement, mais ce n'est pas un projet nommé, et "
+            "questions.yaml est lu dans le dépôt au lieu du volume. Déposer "
+            f"{POINTEUR} puis poser EXIGER_VOLUME=1 (EX-PRJ-01, EX-PRJ-12)."
         )
     for avertissement in (_avertissements_nom(p.identifiant)
                           if not p.est_developpement else []):

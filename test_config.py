@@ -180,16 +180,33 @@ else:
 os.chmod(lecture_seule, 0o700)
 shutil.rmtree(lecture_seule)
 
-# --- Repli de développement : permis, mais annoncé ------------------------
+# --- Aucun volume : la base vit dans le conteneur -------------------------
 sortie = reussit(RACINE_DONNEES="/volume-inexistant")
-assert "repli de développement" in sortie, "un repli qui ne se voit pas tue"
+assert "DANGER" in sortie, "un repli qui ne se voit pas tue"
+assert "DISPARAÎTRA au prochain redéploiement" in sortie, \
+    "le message doit nommer la conséquence, pas seulement l'état"
 assert "EX-ARC-17" in sortie, "le résumé doit dire comment l'interdire"
 assert "type            : preparation" in sortie, \
     "le projet de développement est forcément en préparation (EX-PRJ-06)"
 assert str(RACINE / "questions.yaml") in sortie, \
     "en développement, questions.yaml est lu dans le dépôt, sans copie"
 
-print("TOUT PASSE — repli de développement annoncé, sonde d'écriture")
+# --- Volume monté, mais aucun projet désigné ------------------------------
+# État traversé au premier démarrage sur Railway, entre la création du volume
+# et le dépôt de projet-actif.txt. Les données survivent — dire le contraire
+# enverrait chercher une perte qui n'a pas eu lieu.
+sans_pointeur = pathlib.Path(tempfile.mkdtemp(prefix="volume-nu-"))
+sortie = reussit(RACINE_DONNEES=sans_pointeur)
+assert "DANGER" not in sortie, "les données sont sur le volume : pas de danger"
+assert "volume monté, mais" in sortie
+assert str(sans_pointeur / "projets" / "dev") in sortie, \
+    "le message doit nommer le dossier réellement utilisé"
+assert "questions.yaml est lu dans le dépôt" in sortie, \
+    "EX-PRJ-12 n'est pas honorée dans cet état : le dire"
+assert (sans_pointeur / "projets" / "dev").is_dir()
+shutil.rmtree(sans_pointeur)
+
+print("TOUT PASSE — repli annoncé selon qu'un volume porte ou non les données")
 
 # --------------------------------------------------------------------------- #
 # --- EX-PRJ-05 et EX-PRJ-06 : le type est immuable et refuse ---------------

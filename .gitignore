@@ -1,0 +1,51 @@
+# EX-SEC-06 — aucun secret dans le dépôt. Un secret poussé une fois sur GitHub
+# y demeure : ce fichier est la seule barrière qui agisse avant le commit.
+
+# --- Secrets ---------------------------------------------------------------
+# `.env*` serait plus court et emporterait `.env.example` en silence — c'est
+# exactement le fichier qui manquait au dépôt. La négation est donc explicite.
+.env
+.env.*
+!.env.example
+
+# --- Bases de données ------------------------------------------------------
+# En local, `DOSSIER` retombe sur le dossier courant : la base et ses fichiers
+# WAL se créent à la racine du dépôt.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --- Volume et sorties d'exécution ----------------------------------------
+# Reflet local de /data (EX-PRJ-01) : projets, médias, instantanés, exports.
+/data/
+instantanes/
+exports/
+logs/
+*.log
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Postes de travail -----------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ATTENTION — ne jamais ignorer `alembic/versions/`. Les migrations sont du
+# code de production : une révision non versionnée rend le schéma de Railway
+# irreproductible.
+
+# Repli de développement de config.py : la base et les médias locaux.
+donnees-locales/

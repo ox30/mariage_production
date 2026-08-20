@@ -1,6 +1,6 @@
 # Le Livre des Convoqués
 
-Application événementielle du **mariage du 5 septembre 2026**, à Court (Jura
+Application événementielle du **mariage du 5 septembre 2026**, à Court ( Jura
 bernois). Thématique Terre du Milieu.
 
 Le soir de la fête, une centaine d'invités répondent depuis leur téléphone à un

@@ -540,6 +540,11 @@ assert _attendre(lambda: bd.lire(uid_r).etat == "echouee"), \
 bd.enregistrer_portrait(uid_r, {"nom_fictif": "Aldor", "peuple": "homme",
                                 "portrait": "p", "indice": "i", "fuites_noms": []})
 
+# Référence prise avant tout passage sur l'écran de reprise : la capturer
+# ensuite reviendrait à photographier les dégâts et à les appeler l'état normal.
+etat_initial = bd.lire(uid_r).reponses_json
+generations_initiales = bd.lire(uid_r).nb_generations
+
 # Le portrait propose le second étage tant qu'il n'a pas été donné, et replie
 # les deux actions qui coûtent une réécriture.
 r = c.get(f"/portrait/{uid_r}")
@@ -555,6 +560,19 @@ assert "2 restantes" in r.text, "le coût doit être annoncé"
 # Étage 1 : les cinq questions complémentaires ne sont pas dans la reprise.
 assert "Une phrase que tu répètes tout le temps ?" not in r.text, \
     "le second étage se propose ailleurs, pas par la porte de la reprise"
+
+# --- Renoncer ne laisse aucune trace ---------------------------------------
+# Les corrections vivent dans le formulaire jusqu'à l'envoi : ouvrir l'écran,
+# modifier, puis partir ne doit rien avoir écrit. C'est une propriété du
+# dessin — aucune écriture n'a lieu sur un GET — mais une propriété non
+# vérifiée est une propriété qu'on casse un jour sans s'en apercevoir.
+r = c.get(f"/portrait/{uid_r}/reprendre")
+assert "Revenir sans rien changer" in r.text, "la sortie doit être offerte"
+assert f'href="/portrait/{uid_r}"' in r.text, "et ramener à la chronique"
+assert bd.lire(uid_r).reponses_json == etat_initial, "consulter n'écrit rien"
+assert bd.lire(uid_r).nb_generations == generations_initiales, "et ne consomme rien"
+r = c.get(f"/portrait/{uid_r}")
+assert bd.lire(uid_r).reponses_json == etat_initial, "revenir non plus"
 
 # Une réponse absente du formulaire est inchangée, pas effacée.
 avant_tentatives = bd.lire(uid_r).nb_tentatives

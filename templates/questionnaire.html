@@ -48,6 +48,12 @@
       </button>
       <p class="discret">Réécrire consomme une réécriture, que vous ayez changé
          une réponse ou non.</p>
+      {% if retour_vers %}
+        {# Rien de ce qui est modifié ici n'atteint la base avant l'envoi : les
+           corrections vivent dans le formulaire. Partir les abandonne, et le
+           libellé le dit plutôt que de laisser l'invité le deviner. #}
+        <a class="retour" href="{{ retour_vers }}">← Revenir sans rien changer</a>
+      {% endif %}
     </section>
   {% endif %}
 

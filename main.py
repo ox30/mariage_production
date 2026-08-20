@@ -342,6 +342,7 @@ def reprendre(request: Request, identifiant: str):
             "nb_bonus_mot": NB_BONUS_MOT,
             "facultatif": False,
             "reprise": True,
+            "retour_vers": f"/portrait/{identifiant}",
             "restantes": MAX_GENERATIONS - ligne.nb_generations,
         },
     )

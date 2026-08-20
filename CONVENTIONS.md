@@ -176,6 +176,11 @@ Deux règles, payées cher le 20 août.
 quoi qu'il arrive, parce que `enregistrer_portrait` journalise une tentative
 *et* une génération : le compteur valait déjà 2 avant l'action mesurée.
 
+**Prendre la référence avant l'action, pas après.** Un état capturé après une
+première visite de l'écran photographie les dégâts et les appelle la normale :
+l'assertion ne peut alors plus rien détecter. *Constaté trois fois le 20 août,
+toujours sous cette forme.*
+
 **Attendre le fil avant de mesurer.** Les générations partent en arrière-plan.
 Une mesure prise juste après la requête constate l'état d'avant le travail
 qu'elle prétend vérifier. Le helper `_attendre(condition)` sert à ça.

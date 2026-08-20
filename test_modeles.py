@@ -106,13 +106,31 @@ premier = bd.creer("Ada", "Lovelace", {"metier": "calcul"}, CODES)
 second = bd.creer("ada", "LOVELACE", {"metier": "calcul, corrigé"}, CODES)
 assert premier == second, \
     "une deuxième création doit reconduire vers la chronique existante"
-assert "corrigé" in bd.lire(premier).reponses_json, "les réponses sont reprises"
 
-# Le lieu est figé à la première validation : une reprise réécrit le texte,
-# jamais l'assignation (EX-IA-08).
+# « Reconduit vers », et non « écrase ». Défaut constaté le 20 août : un second
+# passage sous le même nom avait effacé sept réponses et cinq complémentaires.
+# Les réponses sont la seule chose irremplaçable du projet (EX-GEN-08).
+assert "corrigé" not in bd.lire(premier).reponses_json, \
+    "ressaisir son nom ne doit RIEN écraser (EX-IA-26, EX-GEN-08)"
+assert "calcul" in bd.lire(premier).reponses_json, "les premières réponses tiennent"
+
+# Ni l'étage, ni le quota, ni le lieu ne bougent.
+bd.ajouter_bonus(premier, {"talent": "les nombres de Bernoulli"})
+assert bd.lire(premier).etage == 2
 lieu_initial = bd.lire(premier).lieu
+generations = bd.lire(premier).nb_generations
 bd.creer("Ada", "Lovelace", {"metier": "encore autre chose"}, CODES)
-assert bd.lire(premier).lieu == lieu_initial, "le lieu ne se rejoue pas"
+assert bd.lire(premier).etage == 2, "l'étage ne doit pas se désynchroniser"
+assert bd.lire(premier).lieu == lieu_initial, "le lieu ne se rejoue pas (EX-IA-08)"
+assert bd.lire(premier).nb_generations == generations, \
+    "ressaisir son nom ne consomme aucune génération"
+assert "Bernoulli" in bd.lire(premier).reponses_json, \
+    "les réponses complémentaires survivent"
+
+# Et la recherche par nom, interrogée dès la saisie, retrouve la chronique.
+assert bd.chronique_de("  ADA ", "lovelace") == premier, "insensible à la casse"
+assert bd.chronique_de("Ada", "Byron") is None
+assert bd.chronique_de("", "") is None
 
 # Et la contrainte est portée par le schéma, pas seulement par le code.
 with bd.Seance() as s:
@@ -125,7 +143,7 @@ with bd.Seance() as s:
     else:
         raise AssertionError("deux chroniques pour une personne (EX-IA-26)")
 
-print("TOUT PASSE — une seule chronique par personne, lieu figé")
+print("TOUT PASSE — une seule chronique par personne, rien n'est écrasé")
 
 # --------------------------------------------------------------------------- #
 # --- EX-IA-42 et EX-IA-06 : équilibrage sur le code stable ----------------

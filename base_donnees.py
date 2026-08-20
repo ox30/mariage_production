@@ -228,11 +228,16 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
             select(Chronique).where(Chronique.personne_uuid == personne.uuid,
                                     Chronique.supprimee.is_(False)))
         if existante is not None:
-            # Le lieu est figé à la première validation : une reprise réécrit
-            # le texte, jamais l'assignation (EX-IA-08).
-            existante.reponses_json = json.dumps(reponses, ensure_ascii=False)
-            existante.etat = etat
-            seance.commit()
+            # « Reconduit vers », et non « écrase ». Rien n'est touché : ni les
+            # réponses, ni l'étage, ni le quota. Les réponses sont la seule
+            # chose irremplaçable du projet (EX-GEN-08) ; les remplacer parce
+            # que quelqu'un a ressaisi son nom serait la pire des portes
+            # dérobées.
+            #
+            # Défaut constaté le 20 août : un second passage sous le même nom
+            # avait effacé sept réponses et cinq complémentaires, consommé une
+            # génération sur trois, et laissé `etage` à 2 alors qu'il ne
+            # restait aucune réponse complémentaire.
             return existante.uuid
 
         chronique = Chronique(
@@ -244,6 +249,27 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
         seance.add(chronique)
         seance.commit()
         return chronique.uuid
+
+
+def chronique_de(prenom: str, nom: str) -> str | None:
+    """L'identifiant de la chronique de cette personne, si elle en a une.
+
+    Interrogée dès la saisie du nom, pour reconduire l'invité vers son
+    personnage au lieu de lui faire répondre sept questions qui seraient
+    ensuite ignorées (EX-IA-26). L'écran à deux entrées d'EX-AUTH-09 et la
+    confirmation de doublon d'EX-AUTH-05 viennent à l'étape 2 ; d'ici là,
+    cette reconduction est ce qui protège les réponses déjà données.
+    """
+    if not prenom.strip() or not nom.strip():
+        return None
+    with Seance() as seance:
+        personne = personne_par_nom(seance, prenom, nom)
+        if personne is None:
+            return None
+        return seance.scalar(
+            select(Chronique.uuid).where(
+                Chronique.personne_uuid == personne.uuid,
+                Chronique.supprimee.is_(False)))
 
 
 def lire(identifiant: str) -> Chronique | None:

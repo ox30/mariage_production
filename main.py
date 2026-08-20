@@ -188,6 +188,14 @@ def accueil(request: Request):
 @app.post("/questionnaire", response_class=HTMLResponse)
 def questionnaire(request: Request, prenom: str = Form(...), nom: str = Form(...),
                   genre: str = Form("")):
+    # EX-IA-26 — le nom est confronté aux chroniques existantes DÈS SA SAISIE,
+    # et non à la validation des réponses. Laisser quelqu'un répondre à sept
+    # questions pour lui annoncer ensuite qu'il en avait déjà donné sept
+    # serait la plus mauvaise façon de faire respecter la règle.
+    deja = bd.chronique_de(prenom, nom)
+    if deja:
+        return RedirectResponse(f"/portrait/{deja}", status_code=303)
+
     return gabarits.TemplateResponse(
         "questionnaire.html",
         {
@@ -218,6 +226,12 @@ async def valider(request: Request):
 
     # Le choix se fait avant la génération : celui qui veut en dire plus n'attend
     # pas deux fois, et on ne lui demande pas de rouvrir un cadeau déjà ouvert.
+    # Deuxième barrage : le formulaire de /valider peut être posté sans passer
+    # par /questionnaire. Sans lui, la porte dérobée resterait ouverte.
+    deja = bd.chronique_de(prenom, nom)
+    if deja:
+        return RedirectResponse(f"/portrait/{deja}", status_code=303)
+
     if donnees.get("suite") == "bonus":
         identifiant = bd.creer(prenom, nom, reponses, CODES_LIEUX,
                                etat="brouillon", genre=genre)

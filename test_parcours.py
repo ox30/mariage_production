@@ -458,3 +458,47 @@ assert "elfe à Fondcombe" not in msg, "aucune consigne libre ne traverse"
 # la règle sur la deuxième personne est bien dans le contrat
 assert "« tu », « toi », « ta » et « vous » désignent TOUJOURS" in main.CONFIG["contrat"]
 print("TOUT PASSE — motifs de reprise : liste fermée")
+
+# --- Ressaisir son nom reconduit, n'écrase pas ------------------------------
+# Défaut constaté le 20 août, sur le déploiement réel : un second passage sous
+# le même nom avait effacé sept réponses et cinq complémentaires, consommé une
+# génération sur trois, et laissé `etage` à 2 alors qu'il ne restait aucune
+# réponse complémentaire. EX-IA-26 dit « reconduit vers », pas « écrase ».
+premieres = {"metier": "Opérateur du trafic", "attachement": "Un travail fait proprement",
+             "defaut": "Je veux tout contrôler", "objet": "Mes clubs",
+             "allegeance": "La Lumière", "souvenir_avec": "Les deux",
+             "souvenir": "Une initiation au golf", "souhait": "Du bonheur"}
+r = c.post("/valider", data={"prenom": "Rejoue", "nom": "Essai",
+                             **premieres},
+           follow_redirects=False)
+uid_rejoue = r.headers["location"].rsplit("/", 1)[-1]
+bd.ajouter_bonus(uid_rejoue, {"talent": "Créateur de cette application"})
+bd.enregistrer_portrait(uid_rejoue, {"nom_fictif": "Borin", "peuple": "nain",
+                                     "portrait": "p", "indice": "i",
+                                     "fuites_noms": []})
+avant_etage = bd.lire(uid_rejoue).etage
+avant_generations = bd.lire(uid_rejoue).nb_generations
+avant_lieu = bd.lire(uid_rejoue).lieu
+
+# 1. La saisie du nom seule reconduit, avant toute question.
+r = c.post("/questionnaire", data={"prenom": "rejoue", "nom": "ESSAI"},
+           follow_redirects=False)
+assert r.status_code == 303, "la saisie du nom doit reconduire, pas questionner"
+assert r.headers["location"] == f"/portrait/{uid_rejoue}", r.headers["location"]
+
+# 2. Et le formulaire posté directement ne passe pas non plus.
+r = c.post("/valider", data={"prenom": "Rejoue", "nom": "Essai",
+                             "metier": "espion", "souhait": "autre chose"},
+           follow_redirects=False)
+assert r.headers["location"] == f"/portrait/{uid_rejoue}", "porte dérobée ouverte"
+
+relue = bd.lire(uid_rejoue)
+assert "espion" not in relue.reponses_json, "les nouvelles réponses ne s'écrivent pas"
+assert "Opérateur du trafic" in relue.reponses_json, "les premières tiennent"
+assert "Créateur de cette application" in relue.reponses_json, \
+    "les réponses complémentaires survivent"
+assert relue.etage == avant_etage, "l'étage ne se désynchronise pas"
+assert relue.lieu == avant_lieu, "le lieu ne se rejoue pas (EX-IA-08)"
+assert relue.nb_generations == avant_generations, \
+    "ressaisir son nom ne consomme aucune génération (EX-IA-04)"
+print("TOUT PASSE — ressaisir son nom reconduit sans rien écraser")

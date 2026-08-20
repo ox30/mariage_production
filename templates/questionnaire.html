@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block titre %}{{ titre }}{% endblock %}
 {% block corps %}
+{% set reponses = reponses|default({}) %}
+{% set reprise = reprise|default(false) %}
 <div class="progression"><span id="jauge"></span></div>
 
 <form method="post" action="{{ action }}" id="formulaire">
@@ -9,21 +11,55 @@
   <input type="hidden" name="genre" value="{{ genre }}">
 
   <div class="enveloppe">
+  {% if reprise %}
+    {# Tout est déjà répondu : on ouvre sur le sommaire, d'où l'on saute
+       directement à la question qu'on veut corriger. #}
+    <section class="ecran actif" id="sommaire">
+      <p class="compteur-question">Vos réponses</p>
+      <p class="question">Touchez ce que vous voulez changer.</p>
+      <p class="exemple">Ce que vous ne touchez pas reste tel quel.</p>
+      <ul class="sommaire">
+      {% for q in questions %}
+        <li>
+          <button type="button" class="ligne-sommaire" data-vers="{{ q.cle }}"
+                  {% if q.condition %}data-condition-cle="{{ q.condition.cle }}"
+                  data-condition-valeur="{{ q.condition.valeur }}"{% endif %}>
+            <span class="intitule">{{ q.question }}</span>
+            <span class="valeur" id="apercu-{{ q.cle }}">{{ reponses.get(q.cle, "—") }}</span>
+          </button>
+        </li>
+      {% endfor %}
+      </ul>
+      <input type="hidden" name="suite" id="champ-suite" value="maintenant">
+      <button type="submit" class="action envoi" data-suite="maintenant"
+              data-attente="Le Conseil délibère…">
+        Réécrire ma chronique
+        ({{ restantes }} restante{{ "s" if restantes > 1 else "" }})
+      </button>
+      <p class="discret">Réécrire consomme une réécriture, que vous ayez changé
+         une réponse ou non.</p>
+    </section>
+  {% endif %}
+
   {% for q in questions %}
-    <section class="ecran{% if loop.first %} actif{% endif %}" data-index="{{ loop.index0 }}"
+    <section class="ecran{% if loop.first and not reprise %} actif{% endif %}"
+             data-index="{{ loop.index0 }}" data-cle-question="{{ q.cle }}"
              {% if q.condition %}data-condition-cle="{{ q.condition.cle }}"
              data-condition-valeur="{{ q.condition.valeur }}"{% endif %}>
       <p class="compteur-question"></p>
       <p class="question">{{ q.question }}</p>
       {% if q.exemple %}<p class="exemple">{{ q.exemple }}</p>{% endif %}
 
-      <input type="hidden" name="{{ q.cle }}" id="champ-{{ q.cle }}">
+      <input type="hidden" name="{{ q.cle }}" id="champ-{{ q.cle }}"
+             value="{{ reponses.get(q.cle, '') }}">
 
       {% if q.prealable %}
-        <input type="hidden" name="{{ q.prealable.cle }}" id="champ-{{ q.prealable.cle }}">
+        <input type="hidden" name="{{ q.prealable.cle }}" id="champ-{{ q.prealable.cle }}"
+               value="{{ reponses.get(q.prealable.cle, '') }}">
         <p class="exemple" style="margin-bottom:0.6rem">{{ q.prealable.question }}</p>
         {% for option in q.prealable.options %}
-          <button type="button" class="choix prealable" data-cle="{{ q.prealable.cle }}"
+          <button type="button" class="choix prealable{% if reponses.get(q.prealable.cle) == option %} retenu{% endif %}"
+                  data-cle="{{ q.prealable.cle }}"
                   data-valeur="{{ option }}">{{ option }}</button>
         {% endfor %}
         <p style="margin:0 0 1rem"></p>
@@ -31,21 +67,25 @@
 
       {% if q.type == "boutons" %}
         {% for option in q.options %}
-          <button type="button" class="choix" data-cle="{{ q.cle }}"
+          <button type="button" class="choix{% if reponses.get(q.cle) == option %} retenu{% endif %}"
+                  data-cle="{{ q.cle }}"
                   data-valeur="{{ option }}">{{ option }}</button>
         {% endfor %}
       {% elif q.type == "texte_long" %}
         <textarea id="saisie-{{ q.cle }}" data-cle="{{ q.cle }}"
-                  maxlength="{{ q.limite }}"></textarea>
+                  maxlength="{{ q.limite }}">{{ reponses.get(q.cle, "") }}</textarea>
         <p class="reste"><span id="reste-{{ q.cle }}">{{ q.limite }}</span> caractères</p>
-        <button type="button" class="action suivant" disabled>Suivant</button>
+        <button type="button" class="action suivant" disabled>{% if reprise %}Garder cette réponse{% else %}Suivant{% endif %}</button>
       {% else %}
         <input type="text" id="saisie-{{ q.cle }}" data-cle="{{ q.cle }}"
-               maxlength="{{ q.limite }}" autocomplete="off">
-        <button type="button" class="action suivant" disabled>Suivant</button>
+               maxlength="{{ q.limite }}" autocomplete="off"
+               value="{{ reponses.get(q.cle, '') }}">
+        <button type="button" class="action suivant" disabled>{% if reprise %}Garder cette réponse{% else %}Suivant{% endif %}</button>
       {% endif %}
 
-      {% if not loop.first %}
+      {% if reprise %}
+        <button type="button" class="retour" data-sommaire>← Sommaire</button>
+      {% elif not loop.first %}
         <button type="button" class="retour" data-arriere>← Revenir</button>
       {% elif facultatif %}
         <button type="submit" class="retour envoi" data-suite="sortie">
@@ -55,6 +95,7 @@
     </section>
   {% endfor %}
 
+  {% if not reprise %}
     <section class="ecran" data-index="{{ questions|length }}">
       <p class="compteur-question">C'est tout</p>
       <input type="hidden" name="suite" id="champ-suite" value="maintenant">
@@ -81,12 +122,14 @@
       {% endif %}
       <button type="button" class="retour" data-arriere>← Revenir</button>
     </section>
+  {% endif %}
   </div>
 </form>
 
 <script>
 (function () {
   var facultatif = {{ "true" if facultatif else "false" }};
+  var reprise = {{ "true" if reprise else "false" }};
   var ecrans = Array.prototype.slice.call(document.querySelectorAll(".ecran"));
   var jauge = document.getElementById("jauge");
   var courant = 0;
@@ -116,12 +159,27 @@
     ecrans[courant].classList.add("actif");
     jauge.style.width = (courant / (ecrans.length - 1) * 100) + "%";
     numeroter();
+    if (reprise) { rafraichirSommaire(); }
     window.scrollTo(0, 0);
     var saisie = ecrans[courant].querySelector("input[type=text], textarea");
     if (saisie) { saisie.focus(); }
   }
 
   function avancer() {
+    // En reprise, on ne fait pas retraverser les onze autres écrans : on
+    // revient au sommaire dès que plus rien n'attend de réponse. Un écran
+    // conditionnel qui vient de s'activer — l'allégeance passée à l'Ombre —
+    // est vide, donc il est proposé avant le retour.
+    if (reprise) {
+      for (var j = 0; j < ecrans.length; j++) {
+        var cle = ecrans[j].dataset.cleQuestion;
+        if (!cle || j === courant || !estActif(ecrans[j])) { continue; }
+        var champ = document.getElementById("champ-" + cle);
+        if (champ && !champ.value) { afficher(j); return; }
+      }
+      afficher(0);
+      return;
+    }
     for (var i = courant + 1; i < ecrans.length; i++) {
       if (estActif(ecrans[i])) { afficher(i); return; }
     }
@@ -207,6 +265,47 @@
 
   document.querySelectorAll("[data-arriere]").forEach(function (bouton) {
     bouton.addEventListener("click", reculer);
+  });
+
+  // --- Reprise : sauts depuis le sommaire, et retour vers lui --------------
+  document.querySelectorAll("[data-vers]").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      for (var i = 0; i < ecrans.length; i++) {
+        if (ecrans[i].dataset.cleQuestion === bouton.dataset.vers) {
+          afficher(i);
+          return;
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-sommaire]").forEach(function (bouton) {
+    bouton.addEventListener("click", function () { afficher(0); });
+  });
+
+  function rafraichirSommaire() {
+    // Le sommaire montre l'état courant, y compris les corrections non encore
+    // envoyées : sans cela, on ne saurait pas ce qu'on a déjà changé.
+    document.querySelectorAll("[data-vers]").forEach(function (bouton) {
+      var cle = bouton.dataset.vers;
+      var champ = document.getElementById("champ-" + cle);
+      var apercu = document.getElementById("apercu-" + cle);
+      if (apercu && champ) { apercu.textContent = champ.value || "—"; }
+      // Une question conditionnelle écartée n'a pas à figurer au sommaire.
+      var ligne = bouton.parentNode;
+      var condition = bouton.dataset.conditionCle;
+      if (condition) {
+        var pilote = document.getElementById("champ-" + condition);
+        var visible = pilote && pilote.value === bouton.dataset.conditionValeur;
+        ligne.style.display = visible ? "" : "none";
+      }
+    });
+  }
+
+  // Les champs arrivent déjà remplis : on rejoue l'événement de saisie pour
+  // que le compteur de caractères et l'état du bouton soient justes d'emblée.
+  document.querySelectorAll("[data-cle][id^=saisie-]").forEach(function (champ) {
+    if (champ.value) { champ.dispatchEvent(new Event("input")); }
   });
 
   // Un questionnaire facultatif se traverse sans rien écrire : le bouton est

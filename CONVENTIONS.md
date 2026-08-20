@@ -136,6 +136,37 @@ Trois règles :
   survit dans les bases déjà déployées ; toute suppression est douce
   (`EX-GEN-03`) et se décide à la main.
 
+## Valeurs dérivées
+
+Trois grandeurs ne sont jamais déclarées, toujours recalculées depuis ce
+qu'elles décrivent. Une valeur dérivée ne peut pas se désynchroniser :
+
+| Grandeur | Dérivée de | Exigence |
+|---|---|---|
+| `nb_generations`, `nb_tentatives` | le journal | `EX-GEN-07`, `EX-IA-21` |
+| `chronique.etage` | les clés de réponses présentes | `EX-QUE-11` |
+| le libellé d'une région | son code stable | `EX-IA-28`, `EX-IA-42` |
+
+Corollaire pour l'étage : comme les réponses ne sont jamais que **fusionnées**,
+jamais retirées, l'étage ne peut mécaniquement pas redescendre. Il dit ce que
+l'invité a donné, et ce qui a été donné l'a été.
+
+## Tests : ce qu'une assertion doit mesurer
+
+Deux règles, payées cher le 20 août.
+
+**Comparer un écart, pas une valeur absolue.** `nb_tentatives == 2` passait
+quoi qu'il arrive, parce que `enregistrer_portrait` journalise une tentative
+*et* une génération : le compteur valait déjà 2 avant l'action mesurée.
+
+**Attendre le fil avant de mesurer.** Les générations partent en arrière-plan.
+Une mesure prise juste après la requête constate l'état d'avant le travail
+qu'elle prétend vérifier. Le helper `_attendre(condition)` sert à ça.
+
+Et toute assertion nouvelle se vérifie **dans les deux sens** : on réintroduit
+le défaut et on regarde le test tomber. Un test qui ne peut pas échouer ne
+prouve rien.
+
 ## Écarts assumés
 
 | Écart | Raison | Échéance |

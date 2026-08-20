@@ -1,7 +1,7 @@
 {% if p.etat == "brouillon" %}
   <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
   <h1>Il reste {{ nb_bonus_mot }} questions</h1>
-  <p>Vos six premières réponses sont enregistrées. Votre chronique s'écrira dès
+  <p>Vos sept premières réponses sont enregistrées. Votre chronique s'écrira dès
      que vous aurez terminé — ou tout de suite, si vous préférez.</p>
   <a class="action" href="/bonus/{{ p.uuid }}/questions">Continuer</a>
 
@@ -46,20 +46,43 @@
     <button class="action" type="submit">C'est bien moi</button>
   </form>
 
+  {% if p.etage == 1 %}
+    {# Gratuit et bénéfique au roman : reste visible, hors du pli. Le cacher
+       ferait chuter la prise, et c'est le roman qui en pâtirait. #}
+    <a class="action sobre" href="/bonus/{{ p.uuid }}/questions">
+      {{ nb_bonus_mot|capitalize }} questions de plus
+    </a>
+    <p class="discret">Votre chronique sera plus riche, et les mariés auront
+       davantage à deviner.</p>
+  {% endif %}
+
   {% if p.nb_generations < max_generations %}
-    <form method="post" action="/portrait/{{ p.uuid }}/regenerer">
-      <input type="hidden" name="motif" id="champ-motif" value="">
-      <p class="discret" style="margin:1.4rem 0 0.5rem">
-        Quelque chose ne va pas ? (facultatif)
+    {# Les deux actions qui consomment une réécriture vont ensemble, repliées,
+       avec leur coût annoncé avant même qu'on ouvre. #}
+    <details class="pli">
+      <summary>Quelque chose ne va pas ?
+        <span class="discret">{{ max_generations - p.nb_generations }} réécriture{{ "s" if max_generations - p.nb_generations > 1 else "" }} restante{{ "s" if max_generations - p.nb_generations > 1 else "" }}</span>
+      </summary>
+
+      <form method="post" action="/portrait/{{ p.uuid }}/regenerer">
+        <input type="hidden" name="motif" id="champ-motif" value="">
+        <p class="discret" style="margin:1rem 0 0.5rem">
+          Dites au Conseil ce qui cloche, ou laissez-le réessayer seul.
+        </p>
+        {% for m in motifs %}
+          <button type="button" class="choix motif" data-valeur="{{ m.cle }}">{{ m.libelle }}</button>
+        {% endfor %}
+        <button class="action sobre" type="submit">Réécrivez-moi ça</button>
+      </form>
+
+      <p class="discret" style="margin:1.2rem 0 0.5rem">
+        Ou corrigez ce que vous avez répondu — une réponse mal tournée donne
+        un portrait qui tombe à côté.
       </p>
-      {% for m in motifs %}
-        <button type="button" class="choix motif" data-valeur="{{ m.cle }}">{{ m.libelle }}</button>
-      {% endfor %}
-      <button class="action sobre" type="submit">
-        Réécrivez-moi ça
-        ({{ max_generations - p.nb_generations }} restant{{ "s" if max_generations - p.nb_generations > 1 else "" }})
-      </button>
-    </form>
+      <a class="action sobre" href="/portrait/{{ p.uuid }}/reprendre">
+        Reprendre mes réponses
+      </a>
+    </details>
     <script>
     document.querySelectorAll(".motif").forEach(function (b) {
       b.addEventListener("click", function () {

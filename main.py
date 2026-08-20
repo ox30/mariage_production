@@ -109,6 +109,10 @@ def libelle_lieu(code: str) -> str:
 
 gabarits.env.globals["libelle_lieu"] = libelle_lieu
 
+# L'étage se déduit des réponses présentes (EX-QUE-11) ; `base_donnees` n'a pas
+# à relire questions.yaml pour savoir lesquelles relèvent du second étage.
+bd.CLES_SECOND_ETAGE = {q["cle"] for q in CONFIG["bonus"]}
+
 # Les libellés annonçant « N questions de plus » sont dérivés de la
 # configuration : déplacer une question d'un étage à l'autre ne doit jamais
 # obliger à corriger un texte à la main.
@@ -286,6 +290,72 @@ async def regenerer(request: Request, identifiant: str):
             and ligne.nb_generations < MAX_GENERATIONS
             and ligne.nb_tentatives < bd.MAX_TENTATIVES):
         _lancer_generation(identifiant, motif=motif)
+    return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
+
+
+@app.get("/portrait/{identifiant}/reprendre", response_class=HTMLResponse)
+def reprendre(request: Request, identifiant: str):
+    """EX-IA-05 — reprendre son questionnaire après lecture du portrait.
+
+    Les questions montrées sont **celles déjà données** : les sept du premier
+    étage, plus les cinq du second si l'invité les a fournies. Jamais moins,
+    puisque l'étage ne redescend pas. Celui qui n'a fait qu'un étage se voit
+    proposer le second ailleurs, sur l'écran du portrait, et non ici — mêler
+    « corriger ce que j'ai dit » et « en dire plus » ferait deux gestes d'un
+    seul bouton.
+
+    L'écran s'ouvre sur un sommaire d'où l'on saute directement à la question
+    qu'on veut corriger : douze écrans à traverser pour changer la huitième
+    réponse serait une façon polie de dissuader les gens de corriger.
+    """
+    ligne = bd.lire(identifiant)
+    if ligne is None:
+        raise HTTPException(status_code=404, detail="Introuvable")
+    # Reprendre sans pouvoir régénérer n'aurait pas de sens : le portrait
+    # resterait celui des anciennes réponses.
+    if ligne.nb_generations >= MAX_GENERATIONS:
+        return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
+
+    questions = list(CONFIG["obligatoires"])
+    if ligne.etage == 2:
+        questions += list(CONFIG["bonus"])
+    return gabarits.TemplateResponse(
+        "questionnaire.html",
+        {
+            "request": request,
+            "prenom": ligne.prenom,
+            "nom": ligne.nom,
+            "genre": ligne.genre or "",
+            "questions": questions,
+            "reponses": json.loads(ligne.reponses_json),
+            "action": f"/portrait/{identifiant}/reprendre",
+            "titre": "Reprendre mes réponses",
+            "bifurcation": False,
+            "nb_bonus_mot": NB_BONUS_MOT,
+            "facultatif": False,
+            "reprise": True,
+            "restantes": MAX_GENERATIONS - ligne.nb_generations,
+        },
+    )
+
+
+@app.post("/portrait/{identifiant}/reprendre")
+async def enregistrer_reprise(request: Request, identifiant: str):
+    ligne = bd.lire(identifiant)
+    if ligne is None:
+        raise HTTPException(status_code=404, detail="Introuvable")
+    donnees = dict(await request.form())
+    reponses = _reponses_du_formulaire(donnees, "obligatoires")
+    if ligne.etage == 2:
+        reponses |= _reponses_du_formulaire(donnees, "bonus")
+    bd.reprendre_reponses(identifiant, reponses)
+    # EX-IA-04 — modifier ses réponses puis régénérer consomme la même unité
+    # que régénérer sans rien changer. Le garde-fou du double appui reste le
+    # même que pour la réécriture, en attendant la file (EX-IA-43).
+    if (ligne.etat != "en_cours"
+            and ligne.nb_generations < MAX_GENERATIONS
+            and ligne.nb_tentatives < bd.MAX_TENTATIVES):
+        _lancer_generation(identifiant)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
 
 

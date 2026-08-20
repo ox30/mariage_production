@@ -19,7 +19,9 @@ bd.valider(uid)
 r = c.get(f"/portrait/{uid}")
 assert "Elwen la Guérisseuse" in r.text and "Second paragraphe" in r.text
 assert "&lt;" in r.text, "échappement Jinja actif"
-assert "Réécrivez-moi ça" in r.text and "2 restants" in r.text
+assert "Réécrivez-moi ça" in r.text and "2 réécritures restantes" in r.text
+# Le coût est annoncé sur le résumé du pli, donc avant qu'on l'ouvre.
+assert "Quelque chose ne va pas ?" in r.text
 
 auth = {"Authorization": "Basic " + base64.b64encode(b"a:secret").decode()}
 r = c.get("/deviner", headers=auth)

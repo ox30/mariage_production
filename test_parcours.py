@@ -502,3 +502,111 @@ assert relue.lieu == avant_lieu, "le lieu ne se rejoue pas (EX-IA-08)"
 assert relue.nb_generations == avant_generations, \
     "ressaisir son nom ne consomme aucune génération (EX-IA-04)"
 print("TOUT PASSE — ressaisir son nom reconduit sans rien écraser")
+
+# --- Reprendre ses réponses après lecture du portrait (EX-IA-05) ------------
+# L'invité modifie n'importe quelle réponse et régénère. Deux règles gouvernent
+# l'opération : rien n'est jamais effacé (EX-GEN-08), et l'étage ne redescend
+# jamais — il dit ce qui a été donné, et ce qui a été donné l'a été.
+base = {"metier": "Fauconnier", "attachement": "Ma famille",
+        "defaut": "Je parle trop", "objet": "Ma longue-vue",
+        "allegeance": "La Lumière", "souvenir_avec": "Les deux",
+        "souvenir": "Un été à la mer", "souhait": "Beaucoup de joie"}
+r = c.post("/valider", data={"prenom": "Repri", "nom": "Se", **base},
+           follow_redirects=False)
+uid_r = r.headers["location"].rsplit("/", 1)[-1]
+
+
+def _attendre(condition, limite=3.0):
+    """Attend qu'un fil de génération ait fini d'écrire.
+
+    Sans cette attente, une mesure prise juste après la requête constate
+    l'état d'AVANT le travail qu'elle prétend vérifier — et l'assertion passe
+    quoi qu'il arrive.
+    """
+    import time as _t
+    fin = _t.monotonic() + limite
+    while _t.monotonic() < fin:
+        if condition():
+            return True
+        _t.sleep(0.05)
+    return False
+
+
+# La création a lancé une génération qui va échouer, faute de clé d'API. Il
+# faut la laisser s'inscrire, sinon son échec tardif se confondrait avec celui
+# de la reprise et rendrait la mesure suivante ininterprétable.
+assert _attendre(lambda: bd.lire(uid_r).etat == "echouee"), \
+    "le fil de génération de la création n'a pas rendu la main"
+bd.enregistrer_portrait(uid_r, {"nom_fictif": "Aldor", "peuple": "homme",
+                                "portrait": "p", "indice": "i", "fuites_noms": []})
+
+# Le portrait propose le second étage tant qu'il n'a pas été donné, et replie
+# les deux actions qui coûtent une réécriture.
+r = c.get(f"/portrait/{uid_r}")
+assert "questions de plus" in r.text, "le second étage doit être proposé ici"
+assert "/portrait/" + uid_r + "/reprendre" in r.text, "la reprise doit être offerte"
+assert "<details" in r.text and "Quelque chose ne va pas ?" in r.text
+
+# L'écran de reprise ouvre sur un sommaire et arrive pré-rempli.
+r = c.get(f"/portrait/{uid_r}/reprendre")
+assert 'id="sommaire"' in r.text and "Touchez ce que vous voulez changer" in r.text
+assert "Fauconnier" in r.text, "les réponses doivent être pré-remplies"
+assert "2 restantes" in r.text, "le coût doit être annoncé"
+# Étage 1 : les cinq questions complémentaires ne sont pas dans la reprise.
+assert "Une phrase que tu répètes tout le temps ?" not in r.text, \
+    "le second étage se propose ailleurs, pas par la porte de la reprise"
+
+# Une réponse absente du formulaire est inchangée, pas effacée.
+avant_tentatives = bd.lire(uid_r).nb_tentatives
+r = c.post(f"/portrait/{uid_r}/reprendre",
+           data={"metier": "Fauconnier du roi"}, follow_redirects=False)
+assert r.status_code == 303
+relue = bd.lire(uid_r)
+assert "Fauconnier du roi" in relue.reponses_json, "la correction est prise"
+assert "Un été à la mer" in relue.reponses_json, "le reste survit (EX-GEN-08)"
+assert relue.etage == 1, "aucune réponse du second étage n'a été donnée"
+
+# EX-IA-04 — modifier puis régénérer consomme la même unité que régénérer.
+# On compare un ÉCART, pas une valeur absolue : les valeurs absolues se
+# décalent au premier bloc inséré, et une assertion qui ne peut pas échouer
+# ne prouve rien.
+assert _attendre(lambda: bd.lire(uid_r).nb_tentatives > avant_tentatives), \
+    "la reprise doit déclencher une génération (EX-IA-04)"
+assert bd.lire(uid_r).nb_tentatives == avant_tentatives + 1, \
+    "et exactement une"
+
+# --- L'étage ne redescend jamais (EX-QUE-11) --------------------------------
+bd.ajouter_bonus(uid_r, {"phrase": "Par la barbe !", "colere": "L'injustice"})
+assert bd.lire(uid_r).etage == 2
+# Repasser par le formulaire complémentaire en l'envoyant vide ne doit pas
+# faire retomber à 1 : les cinq réponses sont toujours là.
+bd.ajouter_bonus(uid_r, {})
+assert bd.lire(uid_r).etage == 2, "l'étage ne redescend jamais"
+assert "Par la barbe !" in bd.lire(uid_r).reponses_json
+# Une reprise partielle non plus.
+bd.reprendre_reponses(uid_r, {"metier": "Fauconnier impérial"})
+assert bd.lire(uid_r).etage == 2, "l'étage ne redescend pas à la reprise"
+assert "Par la barbe !" in bd.lire(uid_r).reponses_json
+
+# Au second étage, la reprise montre les douze questions.
+r = c.get(f"/portrait/{uid_r}/reprendre")
+assert "Une phrase que tu répètes tout le temps ?" in r.text, \
+    "au second étage, tout se repasse"
+assert "Par la barbe !" in r.text, "y compris pré-rempli"
+# Et le portrait ne propose plus le second étage, déjà donné.
+bd.enregistrer_portrait(uid_r, {"nom_fictif": "Aldor", "peuple": "homme",
+                                "portrait": "p", "indice": "i", "fuites_noms": []})
+r = c.get(f"/portrait/{uid_r}")
+assert "questions de plus" not in r.text, "le second étage ne se propose qu'une fois"
+
+# --- Quota épuisé : la reprise est fermée -----------------------------------
+uid_q = bd.creer("Quota", "Plein", dict(base), main.CODES_LIEUX)
+for _ in range(main.MAX_GENERATIONS):
+    bd.enregistrer_portrait(uid_q, {"nom_fictif": "X", "peuple": "nain",
+                                    "portrait": "p", "indice": "i",
+                                    "fuites_noms": []})
+r = c.get(f"/portrait/{uid_q}/reprendre", follow_redirects=False)
+assert r.status_code == 303, "reprendre sans pouvoir régénérer n'a pas de sens"
+r = c.get(f"/portrait/{uid_q}")
+assert "reprendre" not in r.text and "épuisé vos réécritures" in r.text
+print("TOUT PASSE — reprise des réponses, étage monotone, quota respecté")

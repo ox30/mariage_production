@@ -272,6 +272,28 @@ def chronique_de(prenom: str, nom: str) -> str | None:
                 Chronique.supprimee.is_(False)))
 
 
+# Renseigné au démarrage par main.py, seul module qui lit questions.yaml.
+# `base_donnees` n'a pas à connaître le contenu éditorial du questionnaire.
+CLES_SECOND_ETAGE: set[str] = set()
+
+
+def etage_des_reponses(reponses: dict) -> int:
+    """L'étage se **déduit** des réponses présentes ; il ne se déclare pas.
+
+    Une valeur dérivée ne peut pas se désynchroniser de ce qu'elle décrit —
+    même raisonnement que pour les compteurs de génération (EX-GEN-07). Et
+    comme les réponses ne sont jamais que fusionnées, jamais retirées, l'étage
+    ne peut mécaniquement pas redescendre.
+
+    Défaut de la version précédente : `etage = 2 if reponses_bonus else 1`
+    faisait retomber à 1 un invité déjà au second étage qui repassait par le
+    formulaire complémentaire et l'envoyait vide, alors que ses cinq réponses
+    restaient en base. Le tableau de bord mentait alors sur ce qui avait été
+    donné, et la proposition du second étage se rouvrait (EX-QUE-11).
+    """
+    return 2 if any(reponses.get(cle) for cle in CLES_SECOND_ETAGE) else 1
+
+
 def lire(identifiant: str) -> Chronique | None:
     with Seance() as seance:
         chronique = seance.get(Chronique, identifiant)
@@ -385,6 +407,37 @@ def valider(identifiant: str) -> None:
             seance.commit()
 
 
+def reprendre_reponses(identifiant: str, reponses: dict) -> None:
+    """EX-IA-05 — l'invité modifie ses réponses après lecture de son portrait.
+
+    **Fusion, jamais remplacement.** Une réponse absente du formulaire est une
+    réponse inchangée, pas une réponse effacée : les réponses sont la seule
+    chose irremplaçable du projet (EX-GEN-08).
+
+    L'étage se recalcule depuis les réponses fusionnées, donc il ne peut pas
+    redescendre. Le décompte de génération, lui, reste au parcours appelant :
+    modifier ses réponses puis régénérer consomme la même unité que régénérer
+    sans rien changer, parce que du point de vue de l'invité c'est le même
+    geste — obtenir un autre texte (EX-IA-04).
+    """
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return
+        fusionnees = json.loads(chronique.reponses_json)
+        modifiees = sorted(cle for cle, valeur in reponses.items()
+                           if valeur and fusionnees.get(cle) != valeur)
+        fusionnees.update({c: v for c, v in reponses.items() if v})
+        chronique.reponses_json = json.dumps(fusionnees, ensure_ascii=False)
+        chronique.etage = etage_des_reponses(fusionnees)
+        chronique.validee = False
+        chronique.etat = "en_attente"
+        journaliser(seance, "reponses_reprises", objet_uuid=identifiant,
+                    objet_type="chronique", acteur=chronique.personne_uuid,
+                    details={"cles_modifiees": modifiees})
+        seance.commit()
+
+
 def ajouter_bonus(identifiant: str, reponses_bonus: dict) -> None:
     """Fusionne les réponses complémentaires et remet la chronique en attente.
 
@@ -398,7 +451,7 @@ def ajouter_bonus(identifiant: str, reponses_bonus: dict) -> None:
         reponses = json.loads(chronique.reponses_json)
         reponses.update(reponses_bonus)
         chronique.reponses_json = json.dumps(reponses, ensure_ascii=False)
-        chronique.etage = 2 if reponses_bonus else 1
+        chronique.etage = etage_des_reponses(reponses)
         chronique.validee = False
         chronique.etat = "en_attente"
         seance.commit()

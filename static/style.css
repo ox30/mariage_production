@@ -251,3 +251,38 @@ th { font-family: var(--titre); font-weight: 400; color: var(--brume-faible); fo
 @media (prefers-reduced-motion: reduce) {
   *, .progression span { transition: none !important; animation: none !important; }
 }
+
+/* --- Sommaire de reprise (EX-IA-05) --------------------------------------
+   Une liste où l'on voit d'un coup d'œil ce qu'on a répondu, et où l'on
+   touche la ligne à corriger. Douze écrans à traverser pour changer la
+   huitième réponse serait une façon polie de dissuader. */
+.sommaire { list-style: none; padding: 0; margin: 1.2rem 0; }
+.sommaire li { margin: 0 0 0.5rem; }
+.ligne-sommaire {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px; padding: 0.7rem 0.9rem;
+  font: inherit; color: inherit;
+}
+.ligne-sommaire:active { background: rgba(255, 255, 255, 0.1); }
+.ligne-sommaire .intitule {
+  display: block; font-size: 0.82rem; opacity: 0.62; margin-bottom: 0.2rem;
+}
+.ligne-sommaire .valeur {
+  display: block; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Pli des actions qui consomment une réécriture ------------------------
+   Natif, sans JavaScript. Le coût est annoncé sur le résumé, donc avant
+   même qu'on ouvre. */
+.pli { margin: 1.6rem 0 0; }
+.pli > summary {
+  cursor: pointer; padding: 0.6rem 0; list-style: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+.pli > summary::-webkit-details-marker { display: none; }
+.pli > summary::after { content: " ▾"; opacity: 0.5; }
+.pli[open] > summary::after { content: " ▴"; }
+.pli > summary .discret { display: block; font-size: 0.8rem; }

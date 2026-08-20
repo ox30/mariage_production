@@ -21,11 +21,21 @@
       <ul class="sommaire">
       {% for q in questions %}
         <li>
-          <button type="button" class="ligne-sommaire" data-vers="{{ q.cle }}"
+          {# `.choix` est le composant du questionnaire : même fond, même
+             bordure, même hauteur de frappe. Le crayon doré dit que la ligne
+             se modifie, sans qu'il faille lire une consigne. #}
+          <button type="button" class="choix ligne-sommaire" data-vers="{{ q.cle }}"
                   {% if q.condition %}data-condition-cle="{{ q.condition.cle }}"
                   data-condition-valeur="{{ q.condition.valeur }}"{% endif %}>
             <span class="intitule">{{ q.question }}</span>
-            <span class="valeur" id="apercu-{{ q.cle }}">{{ reponses.get(q.cle, "—") }}</span>
+            <span class="valeur" id="apercu-{{ q.cle }}">{{ reponses.get(q.cle, "") }}</span>
+            <span class="crayon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9"/>
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+              </svg>
+            </span>
           </button>
         </li>
       {% endfor %}
@@ -145,7 +155,10 @@
     // Le total dépend des réponses déjà données : un écran conditionnel écarté
     // ne doit pas gonfler le décompte affiché.
     var actifs = ecrans.filter(function (s) {
-      return estActif(s) && s.querySelector(".compteur-question");
+      // Le sommaire de reprise n'est pas une question : le compter donnerait
+      // « 1 / 13 » pour douze questions, et décalerait toute la numérotation.
+      return estActif(s) && s.dataset.cleQuestion
+             && s.querySelector(".compteur-question");
     });
     var questions = actifs.filter(function (s) { return s.querySelector(".question"); });
     questions.forEach(function (s, i) {
@@ -290,7 +303,7 @@
       var cle = bouton.dataset.vers;
       var champ = document.getElementById("champ-" + cle);
       var apercu = document.getElementById("apercu-" + cle);
-      if (apercu && champ) { apercu.textContent = champ.value || "—"; }
+      if (apercu && champ) { apercu.textContent = champ.value; }
       // Une question conditionnelle écartée n'a pas à figurer au sommaire.
       var ligne = bouton.parentNode;
       var condition = bouton.dataset.conditionCle;

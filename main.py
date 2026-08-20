@@ -17,6 +17,7 @@ SQLAlchemy. La génération part toujours dans un `threading.Thread` nu.
 
 import json
 import os
+from pathlib import Path
 import secrets
 import threading
 from contextlib import asynccontextmanager
@@ -108,6 +109,13 @@ def libelle_lieu(code: str) -> str:
 
 
 gabarits.env.globals["libelle_lieu"] = libelle_lieu
+
+# Sans marqueur de version, un navigateur qui a déjà chargé la feuille de style
+# la réutilise : une correction d'affichage faite à 22 h resterait invisible
+# pour tous ceux qui ont ouvert la page plus tôt — c'est-à-dire pour tout le
+# monde. L'empreinte change avec le fichier, donc l'adresse aussi.
+gabarits.env.globals["empreinte_style"] = config.empreinte(
+    Path(RACINE) / "static" / "style.css")
 
 # L'étage se déduit des réponses présentes (EX-QUE-11) ; `base_donnees` n'a pas
 # à relire questions.yaml pour savoir lesquelles relèvent du second étage.

@@ -151,6 +151,23 @@ Corollaire pour l'étage : comme les réponses ne sont jamais que **fusionnées*
 jamais retirées, l'étage ne peut mécaniquement pas redescendre. Il dit ce que
 l'invité a donné, et ce qui a été donné l'a été.
 
+## Interface
+
+**Réutiliser les composants existants.** `.choix` sert au questionnaire comme
+au sommaire de reprise : même fond, même bordure, même hauteur de frappe.
+Inventer une apparence pour un écran le fait détonner, et rien n'indique plus
+ce qui se touche.
+
+**Une cible se touche à une main, à 22 h, écran baissé.** Le marqueur natif de
+`<details>` fait huit pixels : le résumé porte donc `.action.sobre` et occupe
+toute la largeur, avec le coût en dessous, dans la zone de frappe.
+
+**La feuille de style porte son empreinte** — `style.css?v=…`, calculée au
+démarrage. Sans elle, les gabarits se mettent à jour et le style reste figé
+dans le cache du navigateur : une correction d'affichage faite le soir de
+l'événement serait invisible pour tous ceux qui ont ouvert la page plus tôt,
+c'est-à-dire pour tout le monde. *Défaut constaté le 20 août.*
+
 ## Tests : ce qu'une assertion doit mesurer
 
 Deux règles, payées cher le 20 août.

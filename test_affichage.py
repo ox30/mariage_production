@@ -1,4 +1,5 @@
 """Tests de fumée du rendu des chroniques. Lancer : python test_affichage.py"""
+import pathlib
 import base64, os, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 os.environ["MOT_DE_PASSE_ADMIN"] = "secret"
@@ -92,3 +93,39 @@ assert "c'est la région qui fait le chapitre" in r.text
 lignes = [l for l in bd.lister() if l.lieu == "lieu_07"]
 assert len(lignes) >= 2, "les deux comptent pour Minas Tirith"
 print("TOUT PASSE — appariement région / pendant d'ombre")
+
+# --- La feuille de style porte une empreinte de version ---------------------
+# Défaut constaté le 20 août : les gabarits étaient à jour, la feuille de style
+# non — le navigateur réutilisait celle qu'il avait en cache. Le soir de
+# l'événement, une correction d'affichage resterait invisible pour tous ceux
+# qui ont ouvert la page plus tôt, c'est-à-dire pour tout le monde.
+import config as _config
+r = c.get("/")
+empreinte = _config.empreinte(pathlib.Path(main.RACINE) / "static" / "style.css")
+assert f"/static/style.css?v={empreinte}" in r.text, \
+    "la feuille de style doit porter son empreinte, sinon le cache la fige"
+assert len(empreinte) == 12 and empreinte != "absent"
+
+# --- Le sommaire de reprise réutilise les composants du questionnaire -------
+base_s = {"metier": "Fauconnier", "attachement": "A", "defaut": "D", "objet": "O",
+          "allegeance": "La Lumière", "souvenir_avec": "Les deux",
+          "souvenir": "S", "souhait": "J"}
+uid_s = bd.creer("Style", "Sommaire", base_s, main.CODES_LIEUX)
+bd.enregistrer_portrait(uid_s, {"nom_fictif": "N", "peuple": "homme",
+                                "portrait": "p", "indice": "i", "fuites_noms": []})
+r = c.get(f"/portrait/{uid_s}/reprendre")
+assert 'class="choix ligne-sommaire"' in r.text, \
+    "les lignes réutilisent .choix : une apparence inventée détonnerait"
+assert '<svg' in r.text and 'class="crayon"' in r.text, \
+    "le crayon doit dire que la ligne se modifie, sans consigne à lire"
+
+# Le sommaire n'est pas une question : il ne doit pas entrer dans le décompte.
+assert "s.dataset.cleQuestion" in r.text, \
+    "numeroter() doit exclure le sommaire, sinon 12 questions s'affichent 1/13"
+
+# --- Le pli est un bouton, pas une flèche de huit pixels --------------------
+r = c.get(f"/portrait/{uid_s}")
+assert '<summary class="action sobre">' in r.text, \
+    "le résumé du pli doit être une cible pleine largeur (EX-CYC-04 : une main)"
+assert 'class="compte"' in r.text, "le coût figure sous le libellé, dans la zone de frappe"
+print("TOUT PASSE — style versionné, sommaire cohérent, pli tactile")

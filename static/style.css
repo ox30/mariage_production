@@ -252,37 +252,59 @@ th { font-family: var(--titre); font-weight: 400; color: var(--brume-faible); fo
   *, .progression span { transition: none !important; animation: none !important; }
 }
 
+
 /* --- Sommaire de reprise (EX-IA-05) --------------------------------------
-   Une liste où l'on voit d'un coup d'œil ce qu'on a répondu, et où l'on
-   touche la ligne à corriger. Douze écrans à traverser pour changer la
-   huitième réponse serait une façon polie de dissuader. */
-.sommaire { list-style: none; padding: 0; margin: 1.2rem 0; }
-.sommaire li { margin: 0 0 0.5rem; }
-.ligne-sommaire {
-  display: block; width: 100%; text-align: left; cursor: pointer;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px; padding: 0.7rem 0.9rem;
-  font: inherit; color: inherit;
-}
-.ligne-sommaire:active { background: rgba(255, 255, 255, 0.1); }
+   Les lignes réutilisent `.choix`, le composant du questionnaire : même
+   fond, même bordure, même hauteur de frappe. Inventer une apparence propre
+   au sommaire l'aurait fait détonner, et rien n'aurait indiqué qu'on peut
+   toucher la ligne. */
+.sommaire { list-style: none; padding: 0; margin: 1.4rem 0 0; }
+.sommaire li { margin: 0; }
+
+.ligne-sommaire { position: relative; padding-right: 3.2rem; }
 .ligne-sommaire .intitule {
-  display: block; font-size: 0.82rem; opacity: 0.62; margin-bottom: 0.2rem;
+  display: block;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: var(--brume-faible);
+  margin-bottom: 0.25rem;
 }
 .ligne-sommaire .valeur {
-  display: block; overflow: hidden; text-overflow: ellipsis;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ligne-sommaire .valeur:empty::before { content: "—"; color: var(--brume-faible); }
+/* Le crayon dit « ceci se modifie » sans qu'il faille lire une consigne.
+   Doré comme les actions, parce que c'en est une. */
+.ligne-sommaire .crayon {
+  position: absolute;
+  right: 1.05rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--laiton);
+  opacity: 0.85;
+}
+.ligne-sommaire .crayon svg { display: block; width: 1.15rem; height: 1.15rem; }
 
 /* --- Pli des actions qui consomment une réécriture ------------------------
-   Natif, sans JavaScript. Le coût est annoncé sur le résumé, donc avant
-   même qu'on ouvre. */
-.pli { margin: 1.6rem 0 0; }
-.pli > summary {
-  cursor: pointer; padding: 0.6rem 0; list-style: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-}
+   Un vrai bouton pleine largeur, pas une flèche de quelques pixels : à 22 h,
+   à une main, une cible de 8 px ne se touche pas. Le coût figure dessous, à
+   l'intérieur de la zone de frappe, donc lisible avant d'ouvrir. */
+.pli { margin: 1.5rem 0 0; }
+.pli > summary { list-style: none; cursor: pointer; text-align: center; }
 .pli > summary::-webkit-details-marker { display: none; }
-.pli > summary::after { content: " ▾"; opacity: 0.5; }
-.pli[open] > summary::after { content: " ▴"; }
-.pli > summary .discret { display: block; font-size: 0.8rem; }
+.pli > summary .chevron { color: var(--laiton); margin-left: 0.4rem; }
+.pli[open] > summary .chevron::before { content: "\25B4"; }
+.pli > summary .chevron::before { content: "\25BE"; }
+.pli > summary .compte {
+  display: block;
+  margin-top: 0.35rem;
+  font-family: var(--serif);
+  font-size: 0.82rem;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--brume-faible);
+}
+.pli > summary:focus-visible { outline: 2px solid var(--laiton); outline-offset: 2px; }

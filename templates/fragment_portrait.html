@@ -60,8 +60,9 @@
     {# Les deux actions qui consomment une réécriture vont ensemble, repliées,
        avec leur coût annoncé avant même qu'on ouvre. #}
     <details class="pli">
-      <summary>Quelque chose ne va pas ?
-        <span class="discret">{{ max_generations - p.nb_generations }} réécriture{{ "s" if max_generations - p.nb_generations > 1 else "" }} restante{{ "s" if max_generations - p.nb_generations > 1 else "" }}</span>
+      <summary class="action sobre">
+        Quelque chose ne va pas ?<span class="chevron" aria-hidden="true"></span>
+        <span class="compte">{{ max_generations - p.nb_generations }} réécriture{{ "s" if max_generations - p.nb_generations > 1 else "" }} restante{{ "s" if max_generations - p.nb_generations > 1 else "" }}</span>
       </summary>
 
       <form method="post" action="/portrait/{{ p.uuid }}/regenerer">

@@ -1,5 +1,5 @@
 {% if p.etat == "brouillon" %}
-  <p class="surtitre">{{ p.lieu }}</p>
+  <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
   <h1>Il reste {{ nb_bonus_mot }} questions</h1>
   <p>Vos six premières réponses sont enregistrées. Votre chronique s'écrira dès
      que vous aurez terminé — ou tout de suite, si vous préférez.</p>
@@ -7,9 +7,9 @@
 
 {% elif p.etat in ("en_attente", "en_cours") %}
   <div hx-get="/portrait/{{ p.uuid }}/etat" hx-trigger="every 2s" hx-target="#zone-portrait">
-    <p class="surtitre">{{ p.lieu }}</p>
+    <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
     <h1>On vous attendait ici</h1>
-    <p>Le Conseil vous a convoqué en <strong>{{ p.lieu }}</strong>. L'ennemi est
+    <p>Le Conseil vous a convoqué en <strong>{{ libelle_lieu(p.lieu) }}</strong>. L'ennemi est
        proche, et l'on manque de bras.</p>
     <div class="attente">
       <p>Votre chronique s'écrit<span class="points"></span></p>
@@ -18,7 +18,7 @@
   </div>
 
 {% elif p.etat == "echouee" %}
-  <p class="surtitre">{{ p.lieu }}</p>
+  <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
   <h1>Le scribe a manqué sa plume</h1>
   <p>Vos réponses sont enregistrées, rien n'est perdu. La chronique s'écrira
      plus tard.</p>
@@ -31,10 +31,10 @@
   <p><a class="action sobre" href="/fin">Terminer quand même</a></p>
 
 {% else %}
-  <p class="surtitre">{{ p.lieu }}</p>
+  <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
   <div class="parchemin">
     <p class="nom-fictif">{{ p.nom_fictif }}</p>
-    <p class="appartenance">{{ p.peuple }} &middot; {{ p.lieu }}</p>
+    <p class="appartenance">{{ p.peuple }} &middot; {{ libelle_lieu(p.lieu) }}</p>
     <div class="texte-portrait">
       {% for paragraphe in p.portrait.split("\n") if paragraphe.strip() %}
         <p>{{ paragraphe }}</p>

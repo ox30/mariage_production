@@ -10,3 +10,8 @@ pyyaml==6.0.2
 # sans ce paquet, ZoneInfo lève ZoneInfoNotFoundError. Vérifié au démarrage
 # par config.zone_affichage().
 tzdata==2025.1
+
+# Section 4.2 — ORM et migrations. Requêtes paramétrées par construction
+# (EX-SEC-01), et un schéma reproductible d'un déploiement à l'autre.
+SQLAlchemy==2.0.52
+alembic==1.19.1

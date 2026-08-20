@@ -101,6 +101,7 @@ un nom non.
 | `test_hygiene.py` | `.gitignore` par `git check-ignore`, `.dockerignore` par simulation des règles Docker, absence des prénoms réels |
 | `test_config.py` | résolution du projet actif et les sept chemins d'échec |
 | `test_parcours.py` | parcours invité, cloisonnement, quotas, contrat de style |
+| `test_modeles.py` | schéma, compteurs dérivés, contraintes d'unicité |
 | `test_affichage.py` | rendu, échappement, appariement des lieux |
 
 Le chemin d'échec est testé, pas seulement le chemin heureux.
@@ -114,6 +115,27 @@ jamais.** Les libellés se reformulent librement jusqu'au 4 septembre
 (`EX-PLA-06`) ; renommer une clé rendrait les réponses collectées par le banc
 inexploitables avec celles de production.
 
+## Schéma et migrations
+
+`modeles.py` porte les dix entités de la section 5.1, `alembic/versions/` leur
+histoire. Les migrations s'appliquent **au démarrage** : le service tourne en
+une seule instance (`EX-ARC-05`), il n'y a donc aucune course, et une migration
+qu'on peut oublier de lancer est une migration qu'on oubliera.
+
+Trois règles :
+
+- **Une révision est un instantané historique.** Elle n'importe jamais
+  `modeles` : au niveau de la base, `HorodatageUTC` n'est qu'un `DATETIME`, et
+  `env.py` le rend ainsi. Une révision qui dépendrait du modèle courant
+  changerait de sens à chaque évolution.
+- **`render_as_batch=True`** dès la première révision. SQLite ne sait pas
+  modifier une colonne en place ; sans cela, toute modification ultérieure
+  échouerait.
+- **Les tables absentes du modèle sont ignorées**, jamais proposées à la
+  suppression (`include_object`). La table `participation` du banc d'essai
+  survit dans les bases déjà déployées ; toute suppression est douce
+  (`EX-GEN-03`) et se décide à la main.
+
 ## Écarts assumés
 
 | Écart | Raison | Échéance |
@@ -121,4 +143,7 @@ inexploitables avec celles de production.
 | `ia.py` lit le modèle dans `MODELE_IA`, alors que la section 4.6 le place dans `config.yaml` | `EX-ADM-02` veut le modèle réglable avant ouverture, donc dans `config.yaml`. À déplacer quand `config.yaml` sera lu en entier | étape 2 |
 | `config.py` ne valide que le bloc `projet:` ; `acces`, `quotas`, `ia`, `tables` sont exposés bruts | valider une forme avant d'avoir écrit le code qui la consomme, c'est la deviner | étape 2 |
 | Le contrôle `EX-SEC-18` se met en veille si `PRENOM_MARIEE` et `PRENOM_MARIE` sont absents de l'environnement | c'est le seul dessin qui n'exige pas d'écrire les prénoms dans un fichier versionné. Le garde-fou est l'exécution locale avec le `.env` chargé ; il n'y a pas d'intégration continue dans ce projet | accepté tel quel |
+| `etat_soiree` a une clé primaire entière et non un UUID (`EX-GEN-02`) | table à une seule ligne : une clé UUID n'y apporte rien et retire la garantie qui compte, qu'il n'y ait jamais deux phases simultanées. La contrainte `id = 1` le dit | accepté tel quel |
+| Le rapprochement des personnes se fait sur (prénom, nom) normalisé, sans confirmation | `EX-AUTH-05` (doublon approximatif) et `EX-AUTH-19` (sélection dans la liste importée) arrivent à l'étape 2. D'ici là, deux homonymes réels seraient confondus | étape 2 |
+| `EX-IA-43` est portée par un index unique partiel, mais la mise en file n'existe pas encore : `main.py` se contente de refuser si l'état est `en_cours` | vérification suivie d'écriture, donc théoriquement joueuse. La file rendra la course impossible | étape suivante |
 | `.dockerignore` est une liste d'exclusion, non d'inclusion | conforme à la lettre d'`EX-SEC-17`. Une liste d'inclusion couvrirait un nouveau type de fichier sensible, mais tout module oublié ferait échouer le démarrage — et `EX-SAU-09` gèle les déploiements le 5 septembre | accepté tel quel |

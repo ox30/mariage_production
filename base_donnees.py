@@ -1,218 +1,378 @@
-"""Persistance SQLite — **reprise du banc d'essai, en attente de migration**.
+"""Persistance — SQLAlchemy 2.0, migrations Alembic, SQLite en WAL.
 
-Ce module utilise `sqlite3` de la bibliothèque standard, alors que la section
-4.2 du cahier des charges impose SQLAlchemy 2.0 + Alembic. C'est l'écart n° 2
-du briefing : un choix tenable pour une table, intenable pour dix.
+Remplace la persistance `sqlite3` du banc d'essai. L'écart n° 2 du briefing
+est levé.
 
-Il sera remplacé à l'étape suivante du socle par les dix entités de la
-section 5.1. La table `participation` ci-dessous n'existe que pour garder le
-parcours invité fonctionnel jusque-là.
+Deux propriétés gouvernent ce module.
+
+**Aucun compteur n'est stocké.** `nb_generations` et `nb_tentatives` se
+comptent dans le journal à chaque lecture (EX-GEN-07, EX-IA-21). Deux entrées
+distinctes : une *tentative* est un appel émis, une *génération* un portrait
+valide reçu. Un échec technique ne peut donc pas débiter le quota — non parce
+qu'on y prend garde, mais parce qu'il n'existe aucun compteur à incrémenter
+par mégarde.
+
+**Le lieu est un code stable.** Tout ce module raisonne sur `lieu_01`…
+`lieu_10` ; le libellé n'apparaît qu'à l'affichage (EX-IA-28, EX-IA-42).
 """
+
+from __future__ import annotations
 
 import json
-import os
 import random
-import sqlite3
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime
+
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.orm import Session, sessionmaker
 
 import config
+import modeles
 import noms
+from modeles import Chronique, Journal, Personne
 
-# Le chemin et le garde-fou de volume vivent désormais dans config.py : un seul
-# endroit décide où l'application écrit (EX-PRJ-01, EX-ARC-17).
 CHEMIN = str(config.projet().chemin_base)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS participation (
-    uuid              TEXT PRIMARY KEY,
-    prenom            TEXT NOT NULL,
-    nom               TEXT NOT NULL,
-    genre             TEXT,
-    lieu              TEXT NOT NULL,
-    reponses_json     TEXT NOT NULL,
-    etage             INTEGER NOT NULL DEFAULT 1,
-    nom_fictif        TEXT,
-    peuple            TEXT,
-    portrait          TEXT,
-    indice            TEXT,
-    fuites_noms       TEXT,
-    modele            TEXT,
-    duree_s           REAL,
-    jetons_entree     INTEGER,
-    jetons_sortie     INTEGER,
-    nb_generations    INTEGER NOT NULL DEFAULT 0,
-    nb_tentatives     INTEGER NOT NULL DEFAULT 0,
-    etat              TEXT NOT NULL DEFAULT 'en_attente',
-    derniere_erreur   TEXT,
-    validee           INTEGER NOT NULL DEFAULT 0,
-    creee_le          TEXT NOT NULL,
-    modifiee_le       TEXT NOT NULL
-);
-"""
-
-
-def maintenant() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def connexion() -> sqlite3.Connection:
-    cnx = sqlite3.connect(CHEMIN, timeout=15.0)
-    cnx.row_factory = sqlite3.Row
-    cnx.execute("PRAGMA journal_mode=WAL")
-    cnx.execute("PRAGMA foreign_keys=ON")
-    return cnx
-
-
-# Un échec technique ne coûte rien à l'invité, mais il ne doit pas non plus
-# autoriser une boucle infinie d'appels payants. Deux compteurs distincts :
-# `nb_generations` = portraits réellement obtenus, débité du quota ;
-# `nb_tentatives`  = appels tentés, garde-fou technique.
+# Garde-fou technique contre la boucle d'appels payants. Il ne s'agit pas d'un
+# quota : le quota de l'invité est le nombre de portraits obtenus, et un échec
+# ne le débite jamais (EX-IA-21).
 MAX_TENTATIVES = 10
 
 
+def maintenant() -> datetime:
+    return config.maintenant()
+
+
+# --------------------------------------------------------------------------- #
+# Moteur et session
+# --------------------------------------------------------------------------- #
+
+moteur = create_engine(
+    f"sqlite+pysqlite:///{CHEMIN}",
+    # Le worker écrira depuis plusieurs fils ; les sessions, elles, ne sont
+    # jamais partagées entre fils.
+    connect_args={"check_same_thread": False, "timeout": 15.0},
+    future=True,
+)
+
+Seance = sessionmaker(bind=moteur, expire_on_commit=False, future=True)
+
+
+@event.listens_for(moteur, "connect")
+def _pragmas(connexion, _):
+    curseur = connexion.cursor()
+    # EX-SAU-07 — WAL : les lecteurs ne bloquent pas l'écrivain, et le fichier
+    # se copie tel quel.
+    curseur.execute("PRAGMA journal_mode=WAL")
+    # `synchronous=FULL` et non `NORMAL` : la base est la seule chose non
+    # régénérable du projet (EX-GEN-08). En WAL, `NORMAL` peut perdre les
+    # dernières transactions à l'arrêt brutal d'un conteneur. Le surcoût est
+    # d'un `fsync` par validation, soit quelques centaines sur la soirée.
+    curseur.execute("PRAGMA synchronous=FULL")
+    curseur.execute("PRAGMA foreign_keys=ON")
+    curseur.execute("PRAGMA busy_timeout=15000")
+    curseur.close()
+
+
 def initialiser() -> None:
-    with connexion() as cnx:
-        cnx.executescript(SCHEMA)
-        # Migration légère : ajouter une colonne à une base existante plutôt que
-        # d'exiger sa suppression. L'application réelle utilisera Alembic.
-        colonnes = {c["name"] for c in cnx.execute("PRAGMA table_info(participation)")}
-        for nom_colonne, definition in (("genre", "TEXT"),):
-            if nom_colonne not in colonnes:
-                cnx.execute(f"ALTER TABLE participation ADD COLUMN {nom_colonne} {definition}")
-        colonnes = {r["name"] for r in cnx.execute("PRAGMA table_info(participation)")}
-        if "nb_tentatives" not in colonnes:
-            cnx.execute("ALTER TABLE participation ADD COLUMN "
-                        "nb_tentatives INTEGER NOT NULL DEFAULT 0")
+    """Applique les migrations jusqu'à la dernière révision.
 
-
-def assigner_lieu(cnx: sqlite3.Connection, lieux: list[str]) -> str:
-    """Le lieu le moins peuplé ; tirage au sort en cas d'égalité.
-
-    Aucune considération de la table réelle : les grappes fortuites sont
-    voulues, elles brouillent la reconstitution du plan de table.
+    Au démarrage et non par une commande séparée : le service tourne en une
+    seule instance (EX-ARC-05), il n'y a donc aucune course possible, et une
+    migration qu'on peut oublier de lancer est une migration qu'on oubliera.
     """
-    effectifs = {lieu: 0 for lieu in lieux}
-    for ligne in cnx.execute("SELECT lieu, COUNT(*) n FROM participation GROUP BY lieu"):
-        if ligne["lieu"] in effectifs:
-            effectifs[ligne["lieu"]] = ligne["n"]
+    parametres = Config(str(config.RACINE_DEPOT / "alembic.ini"))
+    parametres.set_main_option("script_location",
+                              str(config.RACINE_DEPOT / "alembic"))
+    command.upgrade(parametres, "head")
+
+
+# --------------------------------------------------------------------------- #
+# Compteurs dérivés
+# --------------------------------------------------------------------------- #
+
+def _compter(seance: Session, chronique_uuid: str, action: str) -> int:
+    return seance.scalar(
+        select(func.count()).select_from(Journal)
+        .where(Journal.objet_uuid == chronique_uuid, Journal.action == action)
+    ) or 0
+
+
+def compteurs(seance: Session, chronique_uuid: str) -> tuple[int, int]:
+    """(portraits obtenus, appels tentés), comptés dans le journal.
+
+    Le premier consomme le quota de l'invité, le second est un garde-fou
+    technique. Les deux sont dérivés : aucune colonne ne les porte
+    (EX-GEN-07, EX-IA-21).
+    """
+    return (_compter(seance, chronique_uuid, Journal.CHRONIQUE_GENEREE),
+            _compter(seance, chronique_uuid, Journal.CHRONIQUE_TENTEE))
+
+
+def _garnir(seance: Session, chronique: Chronique | None) -> Chronique | None:
+    """Attache les compteurs dérivés à l'objet renvoyé.
+
+    Ce sont des attributs Python posés à la lecture, jamais des colonnes : ils
+    ne peuvent pas dériver de la réalité, puisqu'ils sont recalculés à chaque
+    fois. Les gabarits continuent d'écrire `p.nb_generations` sans savoir d'où
+    la valeur vient.
+    """
+    if chronique is None:
+        return None
+    obtenus, tentees = compteurs(seance, chronique.uuid)
+    chronique.nb_generations = obtenus
+    chronique.nb_tentatives = tentees
+    chronique.fuites_noms = json.loads(chronique.fuites_noms_json or "[]")
+    return chronique
+
+
+def journaliser(seance: Session, action: str, *, objet_uuid: str | None = None,
+                objet_type: str | None = None, acteur: str | None = None,
+                pour_le_compte_de: str | None = None,
+                details: dict | None = None) -> None:
+    """EX-GEN-05 — trace des actions sensibles, et source des consommations."""
+    seance.add(Journal(
+        action=action, objet_uuid=objet_uuid, objet_type=objet_type,
+        acteur_personne_uuid=acteur, agit_pour_le_compte_de=pour_le_compte_de,
+        details_json=json.dumps(details, ensure_ascii=False) if details else None,
+        horodatage=maintenant(),
+    ))
+
+
+# --------------------------------------------------------------------------- #
+# Personnes
+# --------------------------------------------------------------------------- #
+
+def _cle_nom(prenom: str, nom: str) -> tuple[str, str]:
+    return noms.capitaliser(prenom), noms.capitaliser(nom)
+
+
+def personne_par_nom(seance: Session, prenom: str, nom: str) -> Personne | None:
+    prenom, nom = _cle_nom(prenom, nom)
+    return seance.scalar(
+        select(Personne).where(Personne.prenom == prenom, Personne.nom == nom)
+    )
+
+
+def creer_personne(seance: Session, prenom: str, nom: str,
+                   genre: str | None = None,
+                   source: str = "saisie_libre") -> Personne:
+    """EX-AUTH-21 — le nom est capitalisé une fois, à la création.
+
+    C'est la forme normalisée qui est stockée, montrée aux mariés et versée à
+    la liste des noms interdits.
+    """
+    prenom, nom = _cle_nom(prenom, nom)
+    personne = Personne(prenom=prenom, nom=nom, source=source,
+                        genre=genre if genre in ("masculin", "feminin") else None)
+    seance.add(personne)
+    seance.flush()
+    return personne
+
+
+# --------------------------------------------------------------------------- #
+# Assignation du lieu
+# --------------------------------------------------------------------------- #
+
+def assigner_lieu(seance: Session, codes_lieux: list[str]) -> str:
+    """Le lieu le moins peuplé ; tirage au sort en cas d'égalité (EX-IA-06).
+
+    L'équilibrage porte sur le **code** et non sur le libellé (EX-IA-42) :
+    renommer une région en pleine soirée ne doit rien déplacer.
+
+    Aucune considération de la table réelle n'entre ici (EX-IA-07). Les
+    grappes fortuites sont voulues : une répartition trop régulière serait
+    elle-même un indice, alors qu'une grappe due au hasard est indiscernable
+    d'un plan de table.
+    """
+    effectifs = {code: 0 for code in codes_lieux}
+    for code, total in seance.execute(
+        select(Chronique.lieu, func.count())
+        .where(Chronique.supprimee.is_(False))
+        .group_by(Chronique.lieu)
+    ):
+        if code in effectifs:
+            effectifs[code] = total
     minimum = min(effectifs.values())
-    return random.choice([lieu for lieu, n in effectifs.items() if n == minimum])
+    return random.choice([c for c, n in effectifs.items() if n == minimum])
 
 
-def creer(prenom: str, nom: str, reponses: dict, lieux: list[str],
+# --------------------------------------------------------------------------- #
+# Chroniques
+# --------------------------------------------------------------------------- #
+
+def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
           etat: str = "en_attente", genre: str | None = None) -> str:
-    # Capitalisé une fois, à l'entrée : ce qui est stocké est ce qui sera montré
-    # aux mariés, et c'est aussi ce qui alimente la liste des noms interdits.
-    prenom, nom = noms.capitaliser(prenom), noms.capitaliser(nom)
-    identifiant = str(uuid.uuid4())
-    horodatage = maintenant()
-    with connexion() as cnx:
-        lieu = assigner_lieu(cnx, lieux)
-        cnx.execute(
-            """INSERT INTO participation
-               (uuid, prenom, nom, genre, lieu, reponses_json, etat, creee_le, modifiee_le)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (identifiant, prenom, nom, genre or None, lieu,
-             json.dumps(reponses, ensure_ascii=False), etat, horodatage, horodatage),
+    """Crée la personne si nécessaire, puis sa chronique.
+
+    EX-IA-26 — **une seule chronique par personne.** Une deuxième tentative de
+    création reconduit vers la chronique existante, qui se modifie et se
+    régénère dans la limite des trois générations. Deux chroniques
+    produiraient deux marqueurs sur la carte, dont un que les mariés ne
+    pourraient jamais deviner.
+
+    Le rapprochement se fait sur le couple (prénom, nom) normalisé. La
+    détection de doublon approximative avec confirmation (EX-AUTH-05) et la
+    sélection dans la liste importée (EX-AUTH-19) viennent à l'étape 2 : d'ici
+    là, deux homonymes réels seraient confondus.
+    """
+    with Seance() as seance:
+        personne = personne_par_nom(seance, prenom, nom)
+        if personne is None:
+            personne = creer_personne(seance, prenom, nom, genre=genre)
+        elif genre in ("masculin", "feminin") and personne.genre != genre:
+            personne.genre = genre
+
+        existante = seance.scalar(
+            select(Chronique).where(Chronique.personne_uuid == personne.uuid,
+                                    Chronique.supprimee.is_(False)))
+        if existante is not None:
+            # Le lieu est figé à la première validation : une reprise réécrit
+            # le texte, jamais l'assignation (EX-IA-08).
+            existante.reponses_json = json.dumps(reponses, ensure_ascii=False)
+            existante.etat = etat
+            seance.commit()
+            return existante.uuid
+
+        chronique = Chronique(
+            personne_uuid=personne.uuid,
+            lieu=assigner_lieu(seance, codes_lieux),
+            reponses_json=json.dumps(reponses, ensure_ascii=False),
+            etat=etat,
         )
-    return identifiant
+        seance.add(chronique)
+        seance.commit()
+        return chronique.uuid
 
 
-def lire(identifiant: str) -> sqlite3.Row | None:
-    with connexion() as cnx:
-        return cnx.execute("SELECT * FROM participation WHERE uuid = ?", (identifiant,)).fetchone()
+def lire(identifiant: str) -> Chronique | None:
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return None
+        personne = seance.get(Personne, chronique.personne_uuid)
+        chronique.prenom = personne.prenom
+        chronique.nom = personne.nom
+        chronique.genre = personne.genre
+        return _garnir(seance, chronique)
 
 
-def lister(seulement_validees: bool = False) -> list[sqlite3.Row]:
-    requete = "SELECT * FROM participation"
-    if seulement_validees:
-        requete += " WHERE validee = 1 AND portrait IS NOT NULL"
-    requete += " ORDER BY lieu, creee_le"
-    with connexion() as cnx:
-        return cnx.execute(requete).fetchall()
+def lister(seulement_validees: bool = False) -> list[Chronique]:
+    with Seance() as seance:
+        requete = (select(Chronique, Personne)
+                   .join(Personne, Personne.uuid == Chronique.personne_uuid)
+                   .where(Chronique.supprimee.is_(False)))
+        if seulement_validees:
+            requete = requete.where(Chronique.validee.is_(True),
+                                    Chronique.portrait.is_not(None))
+        sortie = []
+        for chronique, personne in seance.execute(
+                requete.order_by(Chronique.lieu, Chronique.creee_le)):
+            chronique.prenom = personne.prenom
+            chronique.nom = personne.nom
+            chronique.genre = personne.genre
+            sortie.append(_garnir(seance, chronique))
+        return sortie
 
 
 def tous_les_prenoms() -> list[str]:
-    with connexion() as cnx:
-        lignes = cnx.execute("SELECT prenom, nom FROM participation").fetchall()
-    mots: list[str] = []
-    for ligne in lignes:
-        mots += ligne["prenom"].split() + ligne["nom"].split()
-    return mots
+    """Les mots interdits en sortie du modèle (EX-IA-13)."""
+    with Seance() as seance:
+        mots: list[str] = []
+        for prenom, nom in seance.execute(select(Personne.prenom, Personne.nom)):
+            mots += prenom.split() + nom.split()
+        return mots
 
 
 def noms_fictifs_pris(sauf: str | None = None) -> list[str]:
-    """Les noms fictifs déjà attribués, pour éviter deux homonymes sur la carte."""
-    with connexion() as cnx:
-        lignes = cnx.execute(
-            "SELECT uuid, nom_fictif FROM participation WHERE nom_fictif IS NOT NULL"
-        ).fetchall()
-    return [l["nom_fictif"] for l in lignes if l["uuid"] != sauf]
+    """EX-IA-31 — deux personnages homonymes seraient indiscernables."""
+    with Seance() as seance:
+        return [n for identifiant, n in seance.execute(
+            select(Chronique.uuid, Chronique.nom_fictif)
+            .where(Chronique.nom_fictif.is_not(None),
+                   Chronique.supprimee.is_(False)))
+            if identifiant != sauf]
 
 
 def enregistrer_portrait(identifiant: str, portrait: dict) -> None:
-    with connexion() as cnx:
-        cnx.execute(
-            """UPDATE participation SET
-                 nom_fictif=?, peuple=?, portrait=?, indice=?, fuites_noms=?,
-                 modele=?, duree_s=?, jetons_entree=?, jetons_sortie=?,
-                 nb_generations = nb_generations + 1,
-                 nb_tentatives = nb_tentatives + 1,
-                 etat='prete', derniere_erreur=NULL, modifiee_le=?
-               WHERE uuid=?""",
-            (portrait["nom_fictif"], portrait["peuple"], portrait["portrait"],
-             portrait["indice"], json.dumps(portrait.get("fuites_noms", []), ensure_ascii=False),
-             portrait.get("modele"), portrait.get("duree_s"), portrait.get("jetons_entree"),
-             portrait.get("jetons_sortie"), maintenant(), identifiant),
-        )
+    """Portrait valide reçu : une tentative **et** une génération."""
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return
+        chronique.nom_fictif = portrait["nom_fictif"]
+        chronique.peuple = portrait["peuple"]
+        chronique.portrait = portrait["portrait"]
+        chronique.indice = portrait["indice"]
+        chronique.fuites_noms_json = json.dumps(
+            portrait.get("fuites_noms", []), ensure_ascii=False)
+        chronique.modele = portrait.get("modele")
+        chronique.duree_s = portrait.get("duree_s")
+        chronique.jetons_entree = portrait.get("jetons_entree")
+        chronique.jetons_sortie = portrait.get("jetons_sortie")
+        chronique.etat = "prete"
+        chronique.derniere_erreur = None
+        details = {"modele": portrait.get("modele"),
+                   "duree_s": portrait.get("duree_s"),
+                   "jetons_entree": portrait.get("jetons_entree"),
+                   "jetons_sortie": portrait.get("jetons_sortie")}
+        journaliser(seance, Journal.CHRONIQUE_TENTEE, objet_uuid=identifiant,
+                    objet_type="chronique", acteur=chronique.personne_uuid)
+        journaliser(seance, Journal.CHRONIQUE_GENEREE, objet_uuid=identifiant,
+                    objet_type="chronique", acteur=chronique.personne_uuid,
+                    details=details)
+        seance.commit()
 
 
 def enregistrer_echec(identifiant: str, erreur: str) -> None:
-    with connexion() as cnx:
-        cnx.execute(
-            """UPDATE participation
-               SET etat='echouee', derniere_erreur=?,
-                   nb_tentatives = nb_tentatives + 1,
-                   modifiee_le=?
-               WHERE uuid=?""",
-            (erreur[:500], maintenant(), identifiant),
-        )
+    """Échec : une tentative, aucune génération.
+
+    C'est ici que se joue EX-IA-21. Le quota de l'invité suit les portraits
+    obtenus ; une surcharge de l'API à 22 h ne lui retire rien.
+    """
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return
+        chronique.etat = "echouee"
+        chronique.derniere_erreur = erreur[:500]
+        journaliser(seance, Journal.CHRONIQUE_TENTEE, objet_uuid=identifiant,
+                    objet_type="chronique", acteur=chronique.personne_uuid,
+                    details={"erreur": erreur[:300]})
+        seance.commit()
 
 
 def marquer_en_cours(identifiant: str) -> None:
-    with connexion() as cnx:
-        cnx.execute(
-            "UPDATE participation SET etat='en_cours', modifiee_le=? WHERE uuid=?",
-            (maintenant(), identifiant),
-        )
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is not None:
+            chronique.etat = "en_cours"
+            seance.commit()
 
 
 def valider(identifiant: str) -> None:
-    with connexion() as cnx:
-        cnx.execute(
-            "UPDATE participation SET validee=1, modifiee_le=? WHERE uuid=?",
-            (maintenant(), identifiant),
-        )
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is not None:
+            chronique.validee = True
+            seance.commit()
 
 
 def ajouter_bonus(identifiant: str, reponses_bonus: dict) -> None:
-    """Fusionne les réponses complémentaires et remet l'objet en attente.
+    """Fusionne les réponses complémentaires et remet la chronique en attente.
 
     Sans réponse complémentaire — l'invité a choisi de passer — l'étage reste
     à 1 : le tableau de bord doit dire la vérité sur ce qui a été donné.
     """
-    with connexion() as cnx:
-        ligne = cnx.execute(
-            "SELECT reponses_json FROM participation WHERE uuid=?", (identifiant,)
-        ).fetchone()
-        reponses = json.loads(ligne["reponses_json"])
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return
+        reponses = json.loads(chronique.reponses_json)
         reponses.update(reponses_bonus)
-        etage = 2 if reponses_bonus else 1
-        cnx.execute(
-            """UPDATE participation
-               SET reponses_json=?, etage=?, validee=0, etat='en_attente',
-                   modifiee_le=?
-               WHERE uuid=?""",
-            (json.dumps(reponses, ensure_ascii=False), etage, maintenant(), identifiant),
-        )
+        chronique.reponses_json = json.dumps(reponses, ensure_ascii=False)
+        chronique.etage = 2 if reponses_bonus else 1
+        chronique.validee = False
+        chronique.etat = "en_attente"
+        seance.commit()

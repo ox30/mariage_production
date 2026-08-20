@@ -29,13 +29,13 @@ r = c.get(f"/portrait/{uuid}")
 assert r.status_code == 200
 time.sleep(1.5)
 r = c.get(f"/portrait/{uuid}/etat")
-print("état après tentative sans clé :", bd.lire(uuid)["etat"])
+print("état après tentative sans clé :", bd.lire(uuid).etat)
 assert "ANTHROPIC_API_KEY absente" in r.text, r.text[:400]
 
 # les réponses survivent à l'échec de génération : c'est le point important
 ligne = bd.lire(uuid)
-assert "opérateur du trafic" in ligne["reponses_json"]
-assert ligne["lieu"] in main.LIBELLES_LIEUX
+assert "opérateur du trafic" in ligne.reponses_json
+assert ligne.lieu in main.CODES_LIEUX
 
 # pages protégées
 auth = {"Authorization": "Basic " + base64.b64encode(b"a:secret").decode()}
@@ -51,13 +51,13 @@ r = c.get(f"/bonus/{uuid}/questions")
 assert "Une phrase que tu répètes" in r.text
 r = c.post(f"/bonus/{uuid}", data={"phrase": "on verra bien", "lien": "Collègue"}, follow_redirects=False)
 assert r.status_code == 303
-assert bd.lire(uuid)["etage"] == 2 and "on verra bien" in bd.lire(uuid)["reponses_json"]
+assert bd.lire(uuid).etage == 2 and "on verra bien" in bd.lire(uuid).reponses_json
 
 # répartition des lieux : 30 créations, écart maximal de 1
 for i in range(30):
-    bd.creer(f"P{i}", "X", {"metier": "x"}, main.LIBELLES_LIEUX)
+    bd.creer(f"P{i}", "X", {"metier": "x"}, main.CODES_LIEUX)
 from collections import Counter
-compte = Counter(p["lieu"] for p in bd.lister())
+compte = Counter(p.lieu for p in bd.lister())
 print("répartition :", sorted(compte.values()))
 assert max(compte.values()) - min(compte.values()) <= 1, compte
 print("TOUT PASSE — parcours nominal")
@@ -78,12 +78,12 @@ donnees = dict(reponses); donnees.update({"prenom": "Ana", "nom": "Test",
                                           "souvenir_avec": "Solène"})
 r = c2.post("/valider", data=donnees, follow_redirects=False)
 uid2 = r.headers["location"].split("/")[-1]
-assert '"souvenir_avec": "Solène"' in bd.lire(uid2)["reponses_json"], "réponse préalable stockée"
+assert '"souvenir_avec": "Solène"' in bd.lire(uid2).reponses_json, "réponse préalable stockée"
 
 # le message envoyé au modèle porte les prénoms et le sélecteur
 import json as _json, ia
 msg = ia._construire_message(main.CONFIG, {
-    "lieu": "Isengard", "reponses": _json.loads(bd.lire(uid2)["reponses_json"]),
+    "lieu": "Isengard", "reponses": _json.loads(bd.lire(uid2).reponses_json),
     "noms_interdits": ["Solène"], "couple": main.COUPLE})
 assert "la mariée s'appelle Solène" in msg
 assert "DANS CE SOUVENIR (et rien d'autre) → Solène" in msg
@@ -99,7 +99,7 @@ d = dict(donnees); d.update({"prenom": "Bea", "nom": "Test", "suite": "bonus"})
 r = c2.post("/valider", data=d, follow_redirects=False)
 assert "/bonus/" in r.headers["location"] and "/questions" in r.headers["location"]
 uid3 = r.headers["location"].split("/")[2]
-assert bd.lire(uid3)["etat"] == "brouillon", bd.lire(uid3)["etat"]
+assert bd.lire(uid3).etat == "brouillon", bd.lire(uid3).etat
 
 r = c2.get(f"/portrait/{uid3}")
 assert "Il reste cinq questions" in r.text, "état brouillon annoncé"
@@ -110,12 +110,12 @@ assert "sans ces questions" in r.text and "facultatif = true" in r.text
 # sortie sans répondre : étage reste à 1, la génération part quand même
 r = c2.post(f"/bonus/{uid3}", data={"suite": "sortie"}, follow_redirects=False)
 assert r.status_code == 303
-assert bd.lire(uid3)["etage"] == 1, "aucune réponse complémentaire → étage 1"
-assert bd.lire(uid3)["etat"] in ("en_cours", "echouee", "en_attente")
+assert bd.lire(uid3).etage == 1, "aucune réponse complémentaire → étage 1"
+assert bd.lire(uid3).etat in ("en_cours", "echouee", "en_attente")
 
 # le volume reçu est annoncé au modèle
 msg = ia._construire_message(main.CONFIG, {
-    "lieu": "Edoras", "reponses": _json.loads(bd.lire(uid3)["reponses_json"]),
+    "lieu": "Edoras", "reponses": _json.loads(bd.lire(uid3).reponses_json),
     "noms_interdits": [], "couple": main.COUPLE})
 assert "sans complément" in msg and "Exploite-les toutes" in msg
 
@@ -123,9 +123,9 @@ d2 = dict(donnees); d2.update({"prenom": "Cyd", "nom": "Test", "suite": "bonus"}
 uid4 = c2.post("/valider", data=d2, follow_redirects=False).headers["location"].split("/")[2]
 c2.post(f"/bonus/{uid4}", data={"phrase": "on verra", "talent": "je siffle"},
         follow_redirects=False)
-assert bd.lire(uid4)["etage"] == 2
+assert bd.lire(uid4).etage == 2
 msg = ia._construire_message(main.CONFIG, {
-    "lieu": "Edoras", "reponses": _json.loads(bd.lire(uid4)["reponses_json"]),
+    "lieu": "Edoras", "reponses": _json.loads(bd.lire(uid4).reponses_json),
     "noms_interdits": [], "couple": main.COUPLE})
 assert "complémentaires" in msg and "LONGUEUR IMPOSÉE : 220 mots" in msg
 # on ne repropose pas le second étage à qui l'a déjà donné
@@ -157,8 +157,8 @@ r = c2.get(f"/bonus/{uid5}/questions")
 assert 'data-suite="sortie"' in r.text and 'class="retour envoi"' in r.text
 c2.post(f"/bonus/{uid5}", data={"suite": "sortie", "phrase": "ignorée"},
         follow_redirects=False)
-assert bd.lire(uid5)["etage"] == 1, "la sortie ne retient aucune réponse complémentaire"
-assert "ignorée" not in bd.lire(uid5)["reponses_json"]
+assert bd.lire(uid5).etage == 1, "la sortie ne retient aucune réponse complémentaire"
+assert "ignorée" not in bd.lire(uid5).reponses_json
 
 # troncature diagnostiquée comme telle
 assert ia.MODELE_DEFAUT == "claude-sonnet-5"
@@ -225,7 +225,7 @@ sombre.update({"prenom": "Fay", "nom": "Test", "allegeance": "L'Ombre",
                "monstre": "Un monstre, et j'assume",
                "destin": "Oui, et que ce soit spectaculaire", "suite": "maintenant"})
 uid6 = c2.post("/valider", data=sombre, follow_redirects=False).headers["location"].split("/")[-1]
-stocke = bd.lire(uid6)["reponses_json"]
+stocke = bd.lire(uid6).reponses_json
 assert "spectaculaire" in stocke and "j'assume" in stocke, "les deux réponses sont stockées"
 
 msg = ia._construire_message(main.CONFIG, {
@@ -247,12 +247,12 @@ assert "jamais humiliant" in contrat
 print("TOUT PASSE — Ombre : conditionnelles et registres")
 
 # --- Un échec technique ne débite pas le quota de l'invité ------------------
-uid7 = bd.creer("Gil", "Test", {"metier": "x"}, main.LIBELLES_LIEUX)
+uid7 = bd.creer("Gil", "Test", {"metier": "x"}, main.CODES_LIEUX)
 for _ in range(4):
     bd.enregistrer_echec(uid7, "529 overloaded_error")
 ligne = bd.lire(uid7)
-assert ligne["nb_generations"] == 0, "aucun crédit consommé par un échec"
-assert ligne["nb_tentatives"] == 4, ligne["nb_tentatives"]
+assert ligne.nb_generations == 0, "aucun crédit consommé par un échec"
+assert ligne.nb_tentatives == 4, ligne.nb_tentatives
 
 # la relance reste possible après plusieurs échecs
 r = c2.get(f"/portrait/{uid7}")
@@ -261,30 +261,30 @@ assert "Réessayer" in r.text and "rien coûté" in r.text
 # un succès, lui, débite bien
 bd.enregistrer_portrait(uid7, {"nom_fictif": "N", "peuple": "ent", "portrait": "p",
                                "indice": "i", "fuites_noms": []})
-assert bd.lire(uid7)["nb_generations"] == 1
-assert bd.lire(uid7)["nb_tentatives"] == 5
+assert bd.lire(uid7).nb_generations == 1
+assert bd.lire(uid7).nb_tentatives == 5
 
 # garde-fou technique : au-delà de MAX_TENTATIVES, plus aucun appel
 for _ in range(bd.MAX_TENTATIVES):
     bd.enregistrer_echec(uid7, "529")
-avant = bd.lire(uid7)["nb_tentatives"]
+avant = bd.lire(uid7).nb_tentatives
 c2.post(f"/portrait/{uid7}/regenerer", follow_redirects=False)
 import time as _t; _t.sleep(0.4)
-assert bd.lire(uid7)["nb_tentatives"] == avant, "aucun appel au-delà du garde-fou"
+assert bd.lire(uid7).nb_tentatives == avant, "aucun appel au-delà du garde-fou"
 print("TOUT PASSE — un échec ne débite pas le quota")
 
 # --- Un échec de génération ne consomme aucun crédit ------------------------
-uid7 = bd.creer("Gil", "Test", {"metier": "x"}, main.LIBELLES_LIEUX)
+uid7 = bd.creer("Gilo", "Test", {"metier": "x"}, main.CODES_LIEUX)
 for _ in range(5):
     bd.enregistrer_echec(uid7, "HTTP 529 — overloaded_error")
-assert bd.lire(uid7)["nb_generations"] == 0, "cinq pannes, zéro crédit débité"
-assert bd.lire(uid7)["etat"] == "echouee"
+assert bd.lire(uid7).nb_generations == 0, "cinq pannes, zéro crédit débité"
+assert bd.lire(uid7).etat == "echouee"
 # le portrait obtenu, lui, compte
 bd.enregistrer_portrait(uid7, {"nom_fictif": "N", "peuple": "nain", "portrait": "p",
                                "indice": "i", "fuites_noms": []})
-assert bd.lire(uid7)["nb_generations"] == 1
+assert bd.lire(uid7).nb_generations == 1
 # et les réponses ont survécu à tout
-assert "x" in bd.lire(uid7)["reponses_json"]
+assert "x" in bd.lire(uid7).reponses_json
 print("TOUT PASSE — un échec ne consomme aucun crédit")
 
 # --- Le lien déclaré ne doit pas être étendu ---------------------------------
@@ -320,7 +320,7 @@ assert "en Comté" in ia._construire_message(main.CONFIG, {
     "lieu": comte, "reponses": base, "noms_interdits": [], "couple": main.COUPLE})
 
 # noms fictifs déjà attribués
-uid8 = bd.creer("Gil", "Test", {"metier": "x"}, main.LIBELLES_LIEUX)
+uid8 = bd.creer("Gilon", "Test", {"metier": "x"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid8, {"nom_fictif": "Skarn Rouille", "peuple": "orque",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 pris = bd.noms_fictifs_pris()
@@ -367,7 +367,7 @@ avec_voeu = dict(donnees)
 avec_voeu.update({"prenom": "Hal", "nom": "Test", "souhait": "Tout le bonheur du monde",
                   "suite": "maintenant"})
 uid9 = c2.post("/valider", data=avec_voeu, follow_redirects=False).headers["location"].split("/")[-1]
-stocke = bd.lire(uid9)["reponses_json"]
+stocke = bd.lire(uid9).reponses_json
 assert "Tout le bonheur du monde" in stocke, "le vœu est bien enregistré dès l'étage 1"
 msg = ia._construire_message(main.CONFIG, {
     "lieu": comte, "reponses": _json.loads(stocke), "noms_interdits": [], "couple": main.COUPLE})
@@ -404,9 +404,9 @@ assert mod_noms.initiales("jean", "d'alembert") == "J. A."
 assert mod_noms.initiales("anne-marie", "von gunten") == "A.-M. G."
 
 # la capitalisation a lieu à la création, une seule fois
-uid10 = bd.creer("jean-pierre", "GAGNEBIN", {"metier": "x"}, main.LIBELLES_LIEUX)
+uid10 = bd.creer("jean-pierre", "GAGNEBIN", {"metier": "x"}, main.CODES_LIEUX)
 ligne = bd.lire(uid10)
-assert ligne["prenom"] == "Jean-Pierre" and ligne["nom"] == "Gagnebin"
+assert ligne.prenom == "Jean-Pierre" and ligne.nom == "Gagnebin"
 assert "Jean-Pierre" in bd.tous_les_prenoms() and "Gagnebin" in bd.tous_les_prenoms()
 print("TOUT PASSE — capitalisation et initiales")
 
@@ -420,11 +420,11 @@ d = dict(donnees); d.update({"prenom": "jean-pascal", "nom": "van der maas",
                              "genre": "masculin", "suite": "maintenant"})
 uid11 = c2.post("/valider", data=d, follow_redirects=False).headers["location"].split("/")[-1]
 ligne = bd.lire(uid11)
-assert ligne["genre"] == "masculin"
-assert ligne["prenom"] == "Jean-Pascal" and ligne["nom"] == "van der Maas"
+assert ligne.genre == "masculin"
+assert ligne.prenom == "Jean-Pascal" and ligne.nom == "van der Maas"
 
 msg = ia._construire_message(main.CONFIG, {
-    "lieu": comte, "reponses": _json.loads(ligne["reponses_json"]),
+    "lieu": comte, "reponses": _json.loads(ligne.reponses_json),
     "noms_interdits": [], "couple": main.COUPLE, "genre": "masculin"})
 assert "GENRE DU PERSONNAGE : masculin" in msg and "tous les accords suivent" in msg
 

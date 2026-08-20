@@ -86,7 +86,28 @@ gabarits.env.autoescape = True
 
 # Les lieux sont des objets (libellé, locution, pendant d'ombre) ; la base ne
 # stocke que le libellé, l'assignation ne raisonne donc que sur cette liste.
-LIBELLES_LIEUX = [l["libelle"] for l in CONFIG["lieux"]]
+# EX-IA-42 — l'assignation et le stockage portent sur le code stable ; le
+# libellé n'est qu'un paramètre d'affichage, éditable en pleine soirée
+# (EX-ADM-22) sans orpheliner aucune chronique déjà produite.
+for _lieu in CONFIG["lieux"]:
+    if not _lieu.get("code"):
+        raise RuntimeError(
+            "questions.yaml : chaque région doit porter un `code` stable "
+            "(lieu_01…lieu_10) à côté du libellé — EX-IA-42. Le fichier du "
+            "dossier de projet est vraisemblablement antérieur : le remplacer "
+            "sur le volume, l'empreinte au démarrage le confirmera.")
+
+CODES_LIEUX = [l["code"] for l in CONFIG["lieux"]]
+LIEUX_PAR_CODE = {l["code"]: l for l in CONFIG["lieux"]}
+
+
+def libelle_lieu(code: str) -> str:
+    """Le libellé d'affichage d'un code de région."""
+    lieu = LIEUX_PAR_CODE.get(code)
+    return lieu["libelle"] if lieu else code
+
+
+gabarits.env.globals["libelle_lieu"] = libelle_lieu
 
 # Les libellés annonçant « N questions de plus » sont dérivés de la
 # configuration : déplacer une question d'un étage à l'autre ne doit jamais
@@ -124,12 +145,11 @@ def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
             portrait = ia.generer(
                 CONFIG,
                 {
-                    "lieu": next((l for l in CONFIG["lieux"]
-                                   if l["libelle"] == ligne["lieu"]), ligne["lieu"]),
-                    "reponses": json.loads(ligne["reponses_json"]),
+                    "lieu": LIEUX_PAR_CODE.get(ligne.lieu, ligne.lieu),
+                    "reponses": json.loads(ligne.reponses_json),
                     "noms_interdits": interdits,
                     "noms_fictifs_pris": bd.noms_fictifs_pris(sauf=identifiant),
-                    "genre": ligne["genre"],
+                    "genre": ligne.genre,
                     "motif_reprise": motif,
                     "couple": COUPLE,
                 },
@@ -199,11 +219,11 @@ async def valider(request: Request):
     # Le choix se fait avant la génération : celui qui veut en dire plus n'attend
     # pas deux fois, et on ne lui demande pas de rouvrir un cadeau déjà ouvert.
     if donnees.get("suite") == "bonus":
-        identifiant = bd.creer(prenom, nom, reponses, LIBELLES_LIEUX,
+        identifiant = bd.creer(prenom, nom, reponses, CODES_LIEUX,
                                etat="brouillon", genre=genre)
         return RedirectResponse(f"/bonus/{identifiant}/questions", status_code=303)
 
-    identifiant = bd.creer(prenom, nom, reponses, LIBELLES_LIEUX, genre=genre)
+    identifiant = bd.creer(prenom, nom, reponses, CODES_LIEUX, genre=genre)
     _lancer_generation(identifiant)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
 
@@ -245,8 +265,12 @@ async def regenerer(request: Request, identifiant: str):
     # Un échec ne débite rien : on autorise la relance tant que le quota de
     # portraits obtenus n'est pas atteint, avec un garde-fou technique contre
     # la boucle infinie d'appels payants.
-    if (ligne["nb_generations"] < MAX_GENERATIONS
-            and ligne["nb_tentatives"] < bd.MAX_TENTATIVES):
+    # EX-IA-43 — parade provisoire au double appui, en attendant la file :
+    # une génération déjà en cours n'en déclenche pas une seconde. L'index
+    # unique partiel sur `tache` la rendra impossible plutôt qu'improbable.
+    if (ligne.etat != "en_cours"
+            and ligne.nb_generations < MAX_GENERATIONS
+            and ligne.nb_tentatives < bd.MAX_TENTATIVES):
         _lancer_generation(identifiant, motif=motif)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
 
@@ -262,7 +286,7 @@ def proposer_bonus(request: Request, identifiant: str):
     ligne = bd.lire(identifiant)
     if ligne is None:
         raise HTTPException(status_code=404, detail="Introuvable")
-    if ligne["etage"] == 2:
+    if ligne.etage == 2:
         return RedirectResponse("/fin", status_code=303)
     return gabarits.TemplateResponse(
         "bonus_intro.html",
@@ -279,8 +303,8 @@ def questions_bonus(request: Request, identifiant: str):
         "questionnaire.html",
         {
             "request": request,
-            "prenom": ligne["prenom"],
-            "nom": ligne["nom"],
+            "prenom": ligne.prenom,
+            "nom": ligne.nom,
             "questions": CONFIG["bonus"],
             "action": f"/bonus/{identifiant}",
             "titre": f"{NB_BONUS_MOT.capitalize()} de plus",
@@ -317,14 +341,13 @@ def deviner(request: Request, _: str = Depends(admin)):
     """La page à montrer à quelqu'un qui connaît les participants."""
     par_lieu: dict[str, list] = {}
     for p in bd.lister():
-        if not p["portrait"]:
+        if not p.portrait:
             continue
-        ligne = dict(p)
         # Le souvenir et le vœu sont montrés tels quels : la voix de la
         # personne vaut mieux que sa transposition, une fois qu'on l'a devinée.
-        ligne["reponses"] = json.loads(p["reponses_json"])
-        ligne["initiales"] = noms.initiales(p["prenom"], p["nom"])
-        par_lieu.setdefault(p["lieu"], []).append(ligne)
+        p.reponses = json.loads(p.reponses_json)
+        p.initiales = noms.initiales(p.prenom, p.nom)
+        par_lieu.setdefault(libelle_lieu(p.lieu), []).append(p)
     total = sum(len(v) for v in par_lieu.values())
     return gabarits.TemplateResponse(
         "deviner.html", {"request": request, "par_lieu": par_lieu, "total": total}
@@ -338,10 +361,10 @@ def _lieu_affiche(ligne) -> str:
     d'ombre n'est qu'un décor de texte, mais l'administrateur doit savoir
     lequel des deux a servi.
     """
-    region = next((l for l in CONFIG["lieux"] if l["libelle"] == ligne["lieu"]), None)
+    region = LIEUX_PAR_CODE.get(ligne.lieu)
     if region is None:
-        return ligne["lieu"]
-    reponses = json.loads(ligne["reponses_json"])
+        return ligne.lieu
+    reponses = json.loads(ligne.reponses_json)
     monstre = str(reponses.get("monstre", "")).startswith("Un monstre")
     if monstre and region.get("ombre"):
         return f"{region['libelle']} / {region['ombre']}"
@@ -350,10 +373,12 @@ def _lieu_affiche(ligne) -> str:
 
 @app.get("/tableau", response_class=HTMLResponse)
 def tableau(request: Request, _: str = Depends(admin)):
-    participations = [dict(p) | {"lieu_affiche": _lieu_affiche(p)} for p in bd.lister()]
-    jetons_entree = sum(p["jetons_entree"] or 0 for p in participations)
-    jetons_sortie = sum(p["jetons_sortie"] or 0 for p in participations)
-    durees = [p["duree_s"] for p in participations if p["duree_s"]]
+    participations = bd.lister()
+    for p in participations:
+        p.lieu_affiche = _lieu_affiche(p)
+    jetons_entree = sum(p.jetons_entree or 0 for p in participations)
+    jetons_sortie = sum(p.jetons_sortie or 0 for p in participations)
+    durees = [p.duree_s for p in participations if p.duree_s]
     return gabarits.TemplateResponse(
         "tableau.html",
         {
@@ -363,8 +388,8 @@ def tableau(request: Request, _: str = Depends(admin)):
             "jetons_sortie": jetons_sortie,
             "duree_moyenne": round(sum(durees) / len(durees), 1) if durees else None,
             "duree_max": max(durees) if durees else None,
-            "echecs": sum(1 for p in participations if p["etat"] == "echouee"),
-            "fuites": sum(1 for p in participations if p["fuites_noms"] not in (None, "[]")),
+            "echecs": sum(1 for p in participations if p.etat == "echouee"),
+            "fuites": sum(1 for p in participations if p.fuites_noms),
         },
     )
 
@@ -374,24 +399,26 @@ def export(_: str = Depends(admin)):
     return JSONResponse(
         [
             {
-                "uuid": p["uuid"],
-                "prenom": p["prenom"],
-                "nom": p["nom"],
-                "lieu": p["lieu"],
-                "etage": p["etage"],
-                "reponses": json.loads(p["reponses_json"]),
-                "nom_fictif": p["nom_fictif"],
-                "peuple": p["peuple"],
-                "portrait": p["portrait"],
-                "indice": p["indice"],
-                "fuites_noms": json.loads(p["fuites_noms"] or "[]"),
-                "modele": p["modele"],
-                "duree_s": p["duree_s"],
-                "jetons": [p["jetons_entree"], p["jetons_sortie"]],
-                "nb_generations": p["nb_generations"],
-                "nb_tentatives": p["nb_tentatives"],
-                "etat": p["etat"],
-                "derniere_erreur": p["derniere_erreur"],
+                "uuid": p.uuid,
+                "prenom": p.prenom,
+                "nom": p.nom,
+                # Le code fait foi ; le libellé est joint pour la relecture.
+                "lieu": p.lieu,
+                "lieu_libelle": libelle_lieu(p.lieu),
+                "etage": p.etage,
+                "reponses": json.loads(p.reponses_json),
+                "nom_fictif": p.nom_fictif,
+                "peuple": p.peuple,
+                "portrait": p.portrait,
+                "indice": p.indice,
+                "fuites_noms": p.fuites_noms,
+                "modele": p.modele,
+                "duree_s": p.duree_s,
+                "jetons": [p.jetons_entree, p.jetons_sortie],
+                "nb_generations": p.nb_generations,
+                "nb_tentatives": p.nb_tentatives,
+                "etat": p.etat,
+                "derniere_erreur": p.derniere_erreur,
             }
             for p in bd.lister()
         ]

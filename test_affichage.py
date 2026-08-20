@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import main, base_donnees as bd
 ctx = TestClient(main.app); ctx.__enter__(); c = ctx
 
-uid = bd.creer("Marie", "Dupont", {"metier": "infirmière", "attachement": "Ma famille"}, main.LIBELLES_LIEUX)
+uid = bd.creer("Marie", "Dupont", {"metier": "infirmière", "attachement": "Ma famille"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid, {
     "nom_fictif": "Elwen la Guérisseuse", "peuple": "homme",
     "portrait": "Premier paragraphe.\n\nSecond paragraphe avec un < et une \" quote.",
@@ -35,7 +35,7 @@ for _ in range(2):
 r = c.get(f"/portrait/{uid}")
 assert "épuisé vos réécritures" in r.text
 r = c.post(f"/portrait/{uid}/regenerer", follow_redirects=False)
-assert bd.lire(uid)["nb_generations"] == 3, "aucune génération au-delà du plafond"
+assert bd.lire(uid).nb_generations == 3, "aucune génération au-delà du plafond"
 
 # contrôle des noms
 import ia
@@ -48,7 +48,7 @@ print("TOUT PASSE — affichage du portrait et échappement")
 # --- Révélation : souvenir et vœu montrés tels quels -------------------------
 uid2 = bd.creer("Jo", "Test", {"souvenir": "on a raté le dernier train",
                                "souhait": "plein de belles choses"},
-                main.LIBELLES_LIEUX)
+                main.CODES_LIEUX)
 bd.enregistrer_portrait(uid2, {"nom_fictif": "Thorald", "peuple": "nain",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 r = c.get("/deviner", headers=auth)
@@ -58,7 +58,7 @@ assert "Ce qu'il ou elle vous souhaite" in r.text
 print("TOUT PASSE — révélation : souvenir et vœu tels quels")
 
 # --- Initiales affichées au palier d'indice ---------------------------------
-uid3 = bd.creer("jean-pierre", "gagnebin", {"souvenir": "s"}, main.LIBELLES_LIEUX)
+uid3 = bd.creer("jean-pierre", "gagnebin", {"souvenir": "s"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid3, {"nom_fictif": "Skarn", "peuple": "orque",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 r = c.get("/deviner", headers=auth)
@@ -69,12 +69,12 @@ print("TOUT PASSE — initiales au palier d'indice")
 # --- Le tableau apparie région et pendant d'ombre ---------------------------
 uid4 = bd.creer("Mons", "Tre", {"metier": "x", "allegeance": "L'Ombre",
                                 "monstre": "Un monstre, et j'assume"},
-                ["Minas Tirith"])
+                ["lieu_07"])   # EX-IA-42 : le code, jamais le libellé
 bd.enregistrer_portrait(uid4, {"nom_fictif": "Grokna", "peuple": "orque",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 uid5 = bd.creer("Seig", "Neur", {"metier": "x", "allegeance": "L'Ombre",
                                  "monstre": "Un seigneur redouté, mais un seigneur"},
-                ["Minas Tirith"])
+                ["lieu_07"])   # EX-IA-42 : le code, jamais le libellé
 bd.enregistrer_portrait(uid5, {"nom_fictif": "Zahrun", "peuple": "Haradrim",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 r = c.get("/tableau", headers=auth)
@@ -87,6 +87,6 @@ assert "Minas Tirith" in cellules, "le seigneur de l'Ombre reste dans la région
 assert sum(1 for c in cellules if "/" in c) >= 1, "au moins la créature est appariée"
 assert "c'est la région qui fait le chapitre" in r.text
 # la répartition compte la région, pas le pendant
-lignes = [l for l in bd.lister() if l["lieu"] == "Minas Tirith"]
+lignes = [l for l in bd.lister() if l.lieu == "lieu_07"]
 assert len(lignes) >= 2, "les deux comptent pour Minas Tirith"
 print("TOUT PASSE — appariement région / pendant d'ombre")

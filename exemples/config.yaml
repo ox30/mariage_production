@@ -52,6 +52,17 @@ ia:
   # et les mêmes limites de débit que la production (EX-IA-18).
   plafond_appels: 500
 
+worker:
+  # Relu à chaud toutes les 10 s : réglable en pleine soirée sans redéployer
+  # (EX-ARC-20), ce qu'EX-SAU-09 interdit précisément.
+  fils: 8
+
+sauvegarde:
+  # EX-SAU-19 — doublé chez deux fournisseurs distincts. Les identifiants sont
+  # en variables d'environnement (EX-SAU-22) ; seule cette liste est ici, pour
+  # retirer un dépôt devenu lent sans redéployer.
+  destinations: [railway, r2]
+
 tables:
   nombre: 10
 

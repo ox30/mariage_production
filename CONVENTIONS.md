@@ -103,6 +103,7 @@ un nom non.
 | `test_parcours.py` | parcours invité, cloisonnement, quotas, contrat de style |
 | `test_ia.py` | une tentative, exceptions typées, traçabilité, doublons |
 | `test_taches.py` | file, priorité, réclamation atomique, réessai, barrière |
+| `test_instantane.py` | VACUUM INTO, dépôts doublés, sonde, aucune purge |
 | `test_modeles.py` | schéma, compteurs dérivés, contraintes d'unicité |
 | `test_affichage.py` | rendu, échappement, appariement des lieux |
 

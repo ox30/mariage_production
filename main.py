@@ -30,7 +30,9 @@ from fastapi.templating import Jinja2Templates
 
 import base_donnees as bd
 import config
+import depot_objet
 import ia
+import instantane
 import noms
 import taches
 
@@ -81,7 +83,14 @@ async def cycle_de_vie(_: FastAPI):
     print(f"worker          : {fils} fil(s) démarré(s), limite courante "
           f"{taches.fils_actifs()} — réglable dans config.yaml sans "
           f"redéployer (EX-ARC-20)", flush=True)
+    # EX-SAU-21 — une destination muette doit se signaler au démarrage, pas à
+    # minuit. La sonde écrit puis relit un objet d'essai sur chaque dépôt.
+    print(depot_objet.resume_sonde(), flush=True)
+    if instantane.demarrer():
+        print(f"instantanés     : toutes les {int(instantane.PERIODE_S)} s, "
+              f"hors file de tâches (EX-SAU-13, EX-SAU-18)", flush=True)
     yield
+    instantane.arreter()
     taches.arreter()
 
 

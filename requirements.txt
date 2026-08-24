@@ -15,3 +15,6 @@ tzdata==2025.1
 # (EX-SEC-01), et un schéma reproductible d'un déploiement à l'autre.
 SQLAlchemy==2.0.52
 alembic==1.19.1
+
+# EX-SAU-19 — dépôts objets compatibles S3 : buckets Railway et Cloudflare R2.
+boto3==1.43.79

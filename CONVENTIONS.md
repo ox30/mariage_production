@@ -102,6 +102,7 @@ un nom non.
 | `test_config.py` | résolution du projet actif et les sept chemins d'échec |
 | `test_parcours.py` | parcours invité, cloisonnement, quotas, contrat de style |
 | `test_ia.py` | une tentative, exceptions typées, traçabilité, doublons |
+| `test_taches.py` | file, priorité, réclamation atomique, réessai, barrière |
 | `test_modeles.py` | schéma, compteurs dérivés, contraintes d'unicité |
 | `test_affichage.py` | rendu, échappement, appariement des lieux |
 
@@ -190,6 +191,28 @@ qu'elle prétend vérifier. Le helper `_attendre(condition)` sert à ça.
 Et toute assertion nouvelle se vérifie **dans les deux sens** : on réintroduit
 le défaut et on regarde le test tomber. Un test qui ne peut pas échouer ne
 prouve rien.
+
+## La file
+
+Le worker démarre au `lifespan` et s'arrête à l'extinction. `WORKER_ACTIF=0`
+l'inhibe : les tests entrent dans le cycle de vie et ne doivent pas se mettre
+à consommer des appels d'API. Ils pilotent la file par `taches.traiter_une()`,
+qui exécute une tâche ici et maintenant — une attente arbitraire produit des
+tests qui passent une fois sur deux, et un test intermittent finit toujours
+par être ignoré.
+
+Trois règles apprises en écrivant ce module :
+
+- **La réclamation est atomique.** `UPDATE … RETURNING` en une instruction ;
+  un `SELECT` suivi d'un `UPDATE` laisserait une fenêtre où deux fils traitent
+  la même tâche. Éprouvé à huit fils sur soixante tâches.
+- **La tentative se décompte à la prise, non à l'échec.** Une tâche réclamée
+  puis perdue dans un redémarrage a bien coûté un essai — sans quoi une tâche
+  empoisonnée relancerait le service à chaque démarrage.
+- **N'absorber qu'une erreur d'intégrité connue.** `mettre_en_file` ne tait que
+  le doublon d'`EX-IA-43` ; un type inconnu remonte. SQLite ne nomme pas
+  l'index partiel dans son message — il dit « UNIQUE constraint failed:
+  tache.objet_uuid » —, c'est donc sur ce texte qu'on discrimine.
 
 ## Écarts assumés
 

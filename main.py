@@ -12,14 +12,13 @@ réelle les 16 et 17 août.
 État — étape 1 du socle. Manquent encore : mot de passe unique, import Excel,
 photo, Gardien des chroniques perdues, formulaire des mariés, phases de soirée,
 administration, réclamations, kiosque, sauvegardes, file de tâches persistée,
-SQLAlchemy. La génération part toujours dans un `threading.Thread` nu.
+SQLAlchemy, et la génération passe par la file de tâches persistée.
 """
 
 import json
 import os
 from pathlib import Path
 import secrets
-import threading
 from contextlib import asynccontextmanager
 
 import yaml
@@ -33,6 +32,7 @@ import base_donnees as bd
 import config
 import ia
 import noms
+import taches
 
 RACINE = os.path.dirname(os.path.abspath(__file__))
 MAX_GENERATIONS = 3
@@ -77,7 +77,12 @@ async def cycle_de_vie(_: FastAPI):
     # seule chose qui aurait révélé la configuration périmée du 17 août.
     print(config.resume_demarrage(), flush=True)
     bd.initialiser()
+    fils = taches.demarrer()
+    print(f"worker          : {fils} fil(s) démarré(s), limite courante "
+          f"{taches.fils_actifs()} — réglable dans config.yaml sans "
+          f"redéployer (EX-ARC-20)", flush=True)
     yield
+    taches.arreter()
 
 
 app = FastAPI(title="Le Livre des Convoqués", lifespan=cycle_de_vie)
@@ -148,42 +153,75 @@ def admin(identifiants: HTTPBasicCredentials = Depends(securite)) -> str:
 # que sa contribution existe en base.
 # --------------------------------------------------------------------------- #
 
-def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
-    def travail() -> None:
-        ligne = bd.lire(identifiant)
-        if ligne is None:
-            return
-        bd.marquer_en_cours(identifiant)
-        interdits = [m for m in bd.tous_les_prenoms() if len(m) >= 3]
-        # Les prénoms des mariés servent à comprendre les réponses, jamais à
-        # être écrits : ils sont donc aussi interdits en sortie.
-        interdits += [v for v in COUPLE.values() if len(v) >= 3]
-        try:
-            portrait = ia.generer(
-                CONFIG,
-                {
-                    "lieu": LIEUX_PAR_CODE.get(ligne.lieu, ligne.lieu),
-                    "reponses": json.loads(ligne.reponses_json),
-                    "noms_interdits": interdits,
-                    "noms_fictifs_pris": bd.noms_fictifs_pris(sauf=identifiant),
-                    "genre": ligne.genre,
-                    "motif_reprise": motif,
-                    "couple": COUPLE,
-                },
-            )
-            portrait["empreinte_config"] = EMPREINTE_QUESTIONS
-            bd.enregistrer_portrait(identifiant, portrait)
-        except ia.ErreurGeneration as exc:
-            # Le réessai appartient au worker (EX-ARC-13) ; tant qu'il n'existe
-            # pas, une tentative unique et l'échec est consigné avec sa nature
-            # — 429, 529, réseau, réponse ou définitif (EX-IA-22).
-            exc.trace["empreinte_config"] = EMPREINTE_QUESTIONS
-            bd.enregistrer_echec(identifiant, f"{exc.categorie} — {exc}",
-                                 trace=exc.trace)
-        except Exception as exc:
-            bd.enregistrer_echec(identifiant, f"{type(exc).__name__} — {exc}")
+# Le motif de reprise ne survit pas à la mise en file : il n'a de sens que
+# pour la génération qu'il accompagne. Conservé en mémoire le temps que le
+# worker prenne la tâche — le perdre au redémarrage ne coûte qu'un portrait
+# réécrit sans indication, jamais une réponse.
+_motifs_en_attente: dict[str, str] = {}
 
-    threading.Thread(target=travail, daemon=True).start()
+
+def _generer_chronique(identifiant: str) -> None:
+    """Traitant de la file pour une chronique (EX-ARC-14).
+
+    Traduit les exceptions du client d'API en décisions de la file. Seul le
+    429 déclenche la barrière globale : il est propre au compte, alors qu'un
+    529 est une saturation du fournisseur qui se traite tâche par tâche
+    (EX-IA-22, EX-ARC-21).
+    """
+    ligne = bd.lire(identifiant)
+    if ligne is None:
+        return
+    bd.marquer_en_cours(identifiant)
+    interdits = [m for m in bd.tous_les_prenoms() if len(m) >= 3]
+    # Les prénoms des mariés servent à comprendre les réponses, jamais à
+    # être écrits : ils sont donc aussi interdits en sortie.
+    interdits += [v for v in COUPLE.values() if len(v) >= 3]
+    try:
+        portrait = ia.generer(
+            CONFIG,
+            {
+                "lieu": LIEUX_PAR_CODE.get(ligne.lieu, ligne.lieu),
+                "reponses": json.loads(ligne.reponses_json),
+                "noms_interdits": interdits,
+                "noms_fictifs_pris": bd.noms_fictifs_pris(sauf=identifiant),
+                "genre": ligne.genre,
+                "motif_reprise": _motifs_en_attente.pop(identifiant, None),
+                "couple": COUPLE,
+            },
+        )
+    except ia.ErreurGeneration as exc:
+        exc.trace["empreinte_config"] = EMPREINTE_QUESTIONS
+        bd.enregistrer_echec(identifiant, f"{exc.categorie} — {exc}",
+                             trace=exc.trace)
+        if not exc.temporaire:
+            raise taches.EchecDefinitif(f"{exc.categorie} — {exc}") from exc
+        raise taches.EchecTemporaire(
+            f"{exc.categorie} — {exc}",
+            reprendre_apres_s=exc.reprendre_apres_s,
+            suspendre_tout_s=(exc.reprendre_apres_s or 30.0)
+            if exc.categorie == "debit" else None,
+        ) from exc
+
+    portrait["empreinte_config"] = EMPREINTE_QUESTIONS
+    bd.enregistrer_portrait(identifiant, portrait)
+
+
+taches.enregistrer_traitant("generation_chronique", _generer_chronique)
+
+
+def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
+    """Met la génération en file. EX-IA-43 refuse le doublon d'elle-même.
+
+    Plus de vérification préalable de l'état : entre le contrôle et l'écriture,
+    un double appui sur « Réécrivez-moi ça » avait tout le temps de passer.
+    L'index unique partiel rend la course impossible au lieu de la rendre
+    improbable.
+    """
+    if motif:
+        _motifs_en_attente[identifiant] = motif
+    if taches.mettre_en_file("generation_chronique", identifiant) is None:
+        # Une génération est déjà en attente ou en cours pour cette chronique.
+        _motifs_en_attente.pop(identifiant, None)
 
 
 def _reponses_du_formulaire(donnees: dict, bloc: str) -> dict:
@@ -267,16 +305,32 @@ async def valider(request: Request):
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
 
 
+def _contexte_portrait(request: Request, ligne) -> dict:
+    """Contexte commun à la page et au fragment interrogé par HTMX.
+
+    EX-IA-25 — la file est visible : position et ordre de grandeur, jamais un
+    renvoi. EX-IA-32 — l'attente affichée est le temps réellement écoulé
+    depuis la validation, file et tentatives échouées comprises, et non la
+    durée du seul appel réussi.
+    """
+    contexte = {"request": request, "p": ligne,
+                "max_generations": MAX_GENERATIONS,
+                "nb_bonus_mot": NB_BONUS_MOT,
+                "motifs": CONFIG.get("motifs_reprise", [])}
+    if ligne.etat in ("en_attente", "en_cours"):
+        contexte["position"] = taches.position(ligne.uuid)
+        contexte["attente_s"] = taches.attente_estimee_s(ligne.uuid)
+        contexte["ecoule_s"] = taches.secondes_depuis_mise_en_file(ligne.uuid)
+    return contexte
+
+
 @app.get("/portrait/{identifiant}", response_class=HTMLResponse)
 def portrait(request: Request, identifiant: str):
     ligne = bd.lire(identifiant)
     if ligne is None:
         raise HTTPException(status_code=404, detail="Introuvable")
-    return gabarits.TemplateResponse(
-        "portrait.html",
-        {"request": request, "p": ligne, "max_generations": MAX_GENERATIONS,
-         "nb_bonus_mot": NB_BONUS_MOT, "motifs": CONFIG.get("motifs_reprise", [])},
-    )
+    return gabarits.TemplateResponse("portrait.html",
+                                     _contexte_portrait(request, ligne))
 
 
 @app.get("/portrait/{identifiant}/etat", response_class=HTMLResponse)
@@ -285,11 +339,8 @@ def etat_portrait(request: Request, identifiant: str):
     ligne = bd.lire(identifiant)
     if ligne is None:
         raise HTTPException(status_code=404, detail="Introuvable")
-    return gabarits.TemplateResponse(
-        "fragment_portrait.html",
-        {"request": request, "p": ligne, "max_generations": MAX_GENERATIONS,
-         "nb_bonus_mot": NB_BONUS_MOT, "motifs": CONFIG.get("motifs_reprise", [])},
-    )
+    return gabarits.TemplateResponse("fragment_portrait.html",
+                                     _contexte_portrait(request, ligne))
 
 
 @app.post("/portrait/{identifiant}/regenerer")
@@ -304,11 +355,7 @@ async def regenerer(request: Request, identifiant: str):
     # Un échec ne débite rien : on autorise la relance tant que le quota de
     # portraits obtenus n'est pas atteint, avec un garde-fou technique contre
     # la boucle infinie d'appels payants.
-    # EX-IA-43 — parade provisoire au double appui, en attendant la file :
-    # une génération déjà en cours n'en déclenche pas une seconde. L'index
-    # unique partiel sur `tache` la rendra impossible plutôt qu'improbable.
-    if (ligne.etat != "en_cours"
-            and ligne.nb_generations < MAX_GENERATIONS
+    if (ligne.nb_generations < MAX_GENERATIONS
             and ligne.nb_tentatives < bd.MAX_TENTATIVES):
         _lancer_generation(identifiant, motif=motif)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
@@ -372,10 +419,8 @@ async def enregistrer_reprise(request: Request, identifiant: str):
         reponses |= _reponses_du_formulaire(donnees, "bonus")
     bd.reprendre_reponses(identifiant, reponses)
     # EX-IA-04 — modifier ses réponses puis régénérer consomme la même unité
-    # que régénérer sans rien changer. Le garde-fou du double appui reste le
-    # même que pour la réécriture, en attendant la file (EX-IA-43).
-    if (ligne.etat != "en_cours"
-            and ligne.nb_generations < MAX_GENERATIONS
+    # que régénérer sans rien changer.
+    if (ligne.nb_generations < MAX_GENERATIONS
             and ligne.nb_tentatives < bd.MAX_TENTATIVES):
         _lancer_generation(identifiant)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)

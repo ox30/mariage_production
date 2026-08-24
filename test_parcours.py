@@ -3,7 +3,7 @@ import base64, os, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 os.environ["MOT_DE_PASSE_ADMIN"] = "secret"
 from fastapi.testclient import TestClient
-import main, base_donnees as bd
+import main, base_donnees as bd, taches
 
 import contextlib
 ctx = TestClient(main.app); ctx.__enter__(); c = ctx
@@ -27,7 +27,10 @@ uuid = r.headers["location"].split("/")[-1]
 
 r = c.get(f"/portrait/{uuid}")
 assert r.status_code == 200
-time.sleep(1.5)
+# La génération passe désormais par la file (EX-ARC-09). On la vide ici
+# plutôt que d'attendre : une attente arbitraire produit des tests qui
+# passent une fois sur deux.
+assert taches.traiter_une(), "une génération devait être en file"
 r = c.get(f"/portrait/{uuid}/etat")
 print("état après tentative sans clé :", bd.lire(uuid).etat)
 assert "ANTHROPIC_API_KEY absente" in r.text, r.text[:400]
@@ -516,27 +519,26 @@ r = c.post("/valider", data={"prenom": "Repri", "nom": "Se", **base},
 uid_r = r.headers["location"].rsplit("/", 1)[-1]
 
 
-def _attendre(condition, limite=3.0):
-    """Attend qu'un fil de génération ait fini d'écrire.
+def _vider_file(maximum=50):
+    """Exécute les tâches en attente, ici et maintenant.
 
-    Sans cette attente, une mesure prise juste après la requête constate
-    l'état d'AVANT le travail qu'elle prétend vérifier — et l'assertion passe
-    quoi qu'il arrive.
+    Remplace l'attente d'un fil de fond : mesurer juste après la requête
+    constaterait l'état d'AVANT le travail qu'on prétend vérifier, et
+    l'assertion passerait quoi qu'il arrive.
     """
-    import time as _t
-    fin = _t.monotonic() + limite
-    while _t.monotonic() < fin:
-        if condition():
-            return True
-        _t.sleep(0.05)
-    return False
+    faites = 0
+    while faites < maximum and taches.traiter_une():
+        faites += 1
+    return faites
 
 
 # La création a lancé une génération qui va échouer, faute de clé d'API. Il
 # faut la laisser s'inscrire, sinon son échec tardif se confondrait avec celui
 # de la reprise et rendrait la mesure suivante ininterprétable.
-assert _attendre(lambda: bd.lire(uid_r).etat == "echouee"), \
-    "le fil de génération de la création n'a pas rendu la main"
+# Les blocs précédents ont pu laisser des tâches : on vide tout, sinon les
+# décomptes qui suivent mesureraient le travail des autres.
+assert _vider_file() >= 1, "une génération devait être en file"
+assert bd.lire(uid_r).etat == "echouee", "faute de clé d'API"
 bd.enregistrer_portrait(uid_r, {"nom_fictif": "Aldor", "peuple": "homme",
                                 "portrait": "p", "indice": "i", "fuites_noms": []})
 
@@ -588,8 +590,8 @@ assert relue.etage == 1, "aucune réponse du second étage n'a été donnée"
 # On compare un ÉCART, pas une valeur absolue : les valeurs absolues se
 # décalent au premier bloc inséré, et une assertion qui ne peut pas échouer
 # ne prouve rien.
-assert _attendre(lambda: bd.lire(uid_r).nb_tentatives > avant_tentatives), \
-    "la reprise doit déclencher une génération (EX-IA-04)"
+assert _vider_file() == 1, \
+    "la reprise doit mettre exactement une génération en file (EX-IA-04)"
 assert bd.lire(uid_r).nb_tentatives == avant_tentatives + 1, \
     "et exactement une"
 

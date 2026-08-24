@@ -13,7 +13,24 @@
        proche, et l'on manque de bras.</p>
     <div class="attente">
       <p>Votre chronique s'écrit<span class="points"></span></p>
-      <p class="discret">Une dizaine de secondes.</p>
+      {# EX-IA-25 — position et ordre de grandeur, jamais un renvoi : quelqu'un
+         qu'on renvoie à 22 h 30 ne revient pas. EX-IA-32 — le temps affiché
+         est celui réellement écoulé depuis la validation, file et tentatives
+         échouées comprises. #}
+      {% if position and position > 1 %}
+        <p class="discret">{{ position }}<sup>e</sup> dans la file.
+          {% if attente_s %}Environ {{ (attente_s / 30) | round | int * 30 }} secondes.{% endif %}
+        </p>
+      {% elif attente_s %}
+        <p class="discret">Environ {{ (attente_s / 10) | round | int * 10 }} secondes.</p>
+      {% else %}
+        <p class="discret">Une dizaine de secondes.</p>
+      {% endif %}
+      {% if ecoule_s and ecoule_s > 45 %}
+        <p class="discret">Vous patientez depuis {{ ecoule_s }} secondes. Rien
+           n'est perdu : vous pouvez fermer cette page et rouvrir votre lien,
+           votre chronique s'écrira quand même.</p>
+      {% endif %}
     </div>
   </div>
 

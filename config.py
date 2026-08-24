@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import os
+import time
 import pathlib
 import zoneinfo
 from dataclasses import dataclass
@@ -386,6 +387,51 @@ def oublier() -> None:
     """Vide les caches. Réservé aux tests, qui changent d'environnement."""
     projet.cache_clear()
     zone_affichage.cache_clear()
+    _cache_parametres.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Paramètres relus à chaud
+# --------------------------------------------------------------------------- #
+
+# `config.yaml` vit sur le volume : il s'édite depuis la console, sans
+# redéployer. C'est ce qui rend le nombre de fils du worker réglable pendant
+# la soirée (EX-ARC-20), alors qu'EX-SAU-09 gèle les déploiements.
+_cache_parametres: dict[str, tuple[float, dict]] = {}
+DELAI_RELECTURE_S = 10.0
+
+
+def parametre(chemin: str, defaut=None):
+    """Valeur de `config.yaml`, désignée par un chemin pointé.
+
+    Relue au plus toutes les dix secondes : assez souvent pour qu'un réglage
+    fait en pleine soirée prenne effet sans qu'on attende, assez rarement pour
+    ne pas lire un fichier à chaque tâche.
+
+    Le projet de développement n'a pas de `config.yaml` — la valeur par défaut
+    s'applique alors, sans erreur.
+    """
+    p = projet()
+    if p.chemin_configuration is None or not p.chemin_configuration.is_file():
+        return defaut
+
+    horodatage, contenu = _cache_parametres.get("courant", (0.0, {}))
+    if time.monotonic() - horodatage > DELAI_RELECTURE_S:
+        try:
+            contenu = _charger_configuration(p.chemin_configuration)
+        except (OSError, yaml.YAMLError):
+            # Un fichier momentanément illisible — sauvegarde en cours d'écriture
+            # — ne doit pas faire tomber le worker : on garde la dernière
+            # valeur connue.
+            contenu = _cache_parametres.get("courant", (0.0, {}))[1]
+        _cache_parametres["courant"] = (time.monotonic(), contenu)
+
+    valeur = contenu
+    for morceau in chemin.split("."):
+        if not isinstance(valeur, dict) or morceau not in valeur:
+            return defaut
+        valeur = valeur[morceau]
+    return valeur
 
 
 # --------------------------------------------------------------------------- #

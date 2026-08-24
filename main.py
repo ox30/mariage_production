@@ -114,6 +114,11 @@ gabarits.env.globals["libelle_lieu"] = libelle_lieu
 # la réutilise : une correction d'affichage faite à 22 h resterait invisible
 # pour tous ceux qui ont ouvert la page plus tôt — c'est-à-dire pour tout le
 # monde. L'empreinte change avec le fichier, donc l'adresse aussi.
+# EX-IA-45 — sous quelle version du questionnaire ce portrait a-t-il été
+# écrit ? Le fichier évolue jusqu'au 4 septembre au soir (EX-PLA-06) : sans
+# cette empreinte, le cheminement d'un portrait n'est plus reconstituable.
+EMPREINTE_QUESTIONS = config.empreinte(config.projet().chemin_questions)
+
 gabarits.env.globals["empreinte_style"] = config.empreinte(
     Path(RACINE) / "static" / "style.css")
 
@@ -166,7 +171,15 @@ def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
                     "couple": COUPLE,
                 },
             )
+            portrait["empreinte_config"] = EMPREINTE_QUESTIONS
             bd.enregistrer_portrait(identifiant, portrait)
+        except ia.ErreurGeneration as exc:
+            # Le réessai appartient au worker (EX-ARC-13) ; tant qu'il n'existe
+            # pas, une tentative unique et l'échec est consigné avec sa nature
+            # — 429, 529, réseau, réponse ou définitif (EX-IA-22).
+            exc.trace["empreinte_config"] = EMPREINTE_QUESTIONS
+            bd.enregistrer_echec(identifiant, f"{exc.categorie} — {exc}",
+                                 trace=exc.trace)
         except Exception as exc:
             bd.enregistrer_echec(identifiant, f"{type(exc).__name__} — {exc}")
 

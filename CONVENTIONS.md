@@ -101,6 +101,7 @@ un nom non.
 | `test_hygiene.py` | `.gitignore` par `git check-ignore`, `.dockerignore` par simulation des règles Docker, absence des prénoms réels |
 | `test_config.py` | résolution du projet actif et les sept chemins d'échec |
 | `test_parcours.py` | parcours invité, cloisonnement, quotas, contrat de style |
+| `test_ia.py` | une tentative, exceptions typées, traçabilité, doublons |
 | `test_modeles.py` | schéma, compteurs dérivés, contraintes d'unicité |
 | `test_affichage.py` | rendu, échappement, appariement des lieux |
 
@@ -143,6 +144,7 @@ qu'elles décrivent. Une valeur dérivée ne peut pas se désynchroniser :
 
 | Grandeur | Dérivée de | Exigence |
 |---|---|---|
+| les doublons de noms fictifs | les noms fictifs normalisés | `EX-IA-44` |
 | `nb_generations`, `nb_tentatives` | le journal | `EX-GEN-07`, `EX-IA-21` |
 | `chronique.etage` | les clés de réponses présentes | `EX-QUE-11` |
 | le libellé d'une région | son code stable | `EX-IA-28`, `EX-IA-42` |

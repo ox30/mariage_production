@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import random
+import re
+import unicodedata
 from datetime import datetime
 
 from alembic import command
@@ -343,6 +345,48 @@ def noms_fictifs_pris(sauf: str | None = None) -> list[str]:
             if identifiant != sauf]
 
 
+def _cle_fictif(fragment: str) -> str:
+    """Même normalisation qu'`ia._normaliser` : accents dépouillés, minuscules.
+
+    Réécrite ici plutôt qu'importée : la persistance n'a pas à dépendre du
+    client d'API pour comparer deux chaînes.
+    """
+    depouille = unicodedata.normalize("NFKD", fragment.lower())
+    depouille = "".join(c for c in depouille if not unicodedata.combining(c))
+    return re.sub(r"[^a-z]", "", depouille)
+
+
+def doublons_de_noms() -> dict[str, list[str]]:
+    """EX-IA-44 — les chroniques dont le nom fictif en recoupe une autre.
+
+    Dérivé, jamais stocké : un drapeau en colonne mentirait dès qu'une autre
+    chronique est renommée ou supprimée. Le recoupement porte sur le nom
+    entier **et** sur ses mots composants — « Borin Fendroc » et « Borin
+    Ferconte » seraient indiscernables sur la carte.
+
+    Depuis la v3.15, un doublon n'est plus rejeté à la génération (EX-IA-31) :
+    il est signalé à l'écran de relecture, où l'arbitrage se fait au calme.
+    """
+    par_mot: dict[str, set[str]] = {}
+    with Seance() as seance:
+        lignes = list(seance.execute(
+            select(Chronique.uuid, Chronique.nom_fictif)
+            .where(Chronique.nom_fictif.is_not(None),
+                   Chronique.supprimee.is_(False))))
+    for identifiant, nom in lignes:
+        cles = {_cle_fictif(nom)}
+        cles |= {c for c in map(_cle_fictif, nom.split()) if len(c) >= 4}
+        for cle in cles:
+            par_mot.setdefault(cle, set()).add(identifiant)
+
+    doublons: dict[str, set[str]] = {}
+    for identifiants in par_mot.values():
+        if len(identifiants) > 1:
+            for i in identifiants:
+                doublons.setdefault(i, set()).update(identifiants - {i})
+    return {i: sorted(v) for i, v in doublons.items()}
+
+
 def enregistrer_portrait(identifiant: str, portrait: dict) -> None:
     """Portrait valide reçu : une tentative **et** une génération."""
     with Seance() as seance:
@@ -361,10 +405,16 @@ def enregistrer_portrait(identifiant: str, portrait: dict) -> None:
         chronique.jetons_sortie = portrait.get("jetons_sortie")
         chronique.etat = "prete"
         chronique.derniere_erreur = None
+        # EX-IA-45 — invite envoyée, réponse brute, jetons, durée et
+        # empreinte du questions.yaml en vigueur. Au journal et non en
+        # colonne : une colonne ne garderait que la dernière des trois
+        # générations, alors que c'est l'enchaînement qui doit rester lisible.
         details = {"modele": portrait.get("modele"),
                    "duree_s": portrait.get("duree_s"),
                    "jetons_entree": portrait.get("jetons_entree"),
-                   "jetons_sortie": portrait.get("jetons_sortie")}
+                   "jetons_sortie": portrait.get("jetons_sortie"),
+                   "empreinte_config": portrait.get("empreinte_config"),
+                   **(portrait.get("trace") or {})}
         journaliser(seance, Journal.CHRONIQUE_TENTEE, objet_uuid=identifiant,
                     objet_type="chronique", acteur=chronique.personne_uuid)
         journaliser(seance, Journal.CHRONIQUE_GENEREE, objet_uuid=identifiant,
@@ -373,7 +423,8 @@ def enregistrer_portrait(identifiant: str, portrait: dict) -> None:
         seance.commit()
 
 
-def enregistrer_echec(identifiant: str, erreur: str) -> None:
+def enregistrer_echec(identifiant: str, erreur: str,
+                      trace: dict | None = None) -> None:
     """Échec : une tentative, aucune génération.
 
     C'est ici que se joue EX-IA-21. Le quota de l'invité suit les portraits
@@ -387,7 +438,7 @@ def enregistrer_echec(identifiant: str, erreur: str) -> None:
         chronique.derniere_erreur = erreur[:500]
         journaliser(seance, Journal.CHRONIQUE_TENTEE, objet_uuid=identifiant,
                     objet_type="chronique", acteur=chronique.personne_uuid,
-                    details={"erreur": erreur[:300]})
+                    details={"erreur": erreur[:300], **(trace or {})})
         seance.commit()
 
 

@@ -26,6 +26,7 @@ service indéfiniment après chaque redémarrage.
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -315,11 +316,22 @@ def duree_moyenne_s(defaut: float = 32.0, echantillon: int = 20) -> float:
 
 
 def attente_estimee_s(objet_uuid: str) -> float | None:
-    """Ordre de grandeur, jamais une promesse (EX-IA-25)."""
+    """Ordre de grandeur, jamais une promesse (EX-IA-25).
+
+    Le calcul compte les **fournées** : avec huit fils, les rangs 1 à 8 sont
+    servis ensemble, les rangs 9 à 16 dans la fournée suivante. Et la durée
+    d'une fournée est celle de la génération elle-même.
+
+    Défaut du 25 août : la formule `rang ÷ fils × durée` donnait 4 secondes au
+    premier de la file — elle mesurait le temps d'attente **avant** l'appel, en
+    oubliant l'appel. Arrondi à la dizaine, l'écran annonçait « environ
+    0 secondes » pendant les trente secondes de la génération.
+    """
     rang = position(objet_uuid)
     if rang is None:
         return None
-    return round(max(1, rang) / max(1, fils_actifs()) * duree_moyenne_s())
+    fournees = math.ceil(max(1, rang) / max(1, fils_actifs()))
+    return round(fournees * duree_moyenne_s())
 
 
 def secondes_depuis_mise_en_file(objet_uuid: str) -> float | None:

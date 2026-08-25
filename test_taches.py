@@ -289,9 +289,16 @@ assert taches.position("file-0") == 1
 assert taches.position("file-3") == 4
 assert taches.position("inconnu") is None, "aucune tâche vivante, aucune position"
 
-# Un ordre de grandeur, jamais une promesse.
-attente = taches.attente_estimee_s("file-3")
-assert attente and attente > 0
+# Un ordre de grandeur, jamais une promesse — mais jamais zéro non plus.
+# Défaut du 25 août : la formule `rang ÷ fils × durée` mesurait l'attente
+# AVANT l'appel en oubliant l'appel. Le premier de la file recevait 4 secondes,
+# arrondies à la dizaine, et l'écran annonçait « environ 0 secondes » pendant
+# les trente secondes de la génération.
+moyenne = taches.duree_moyenne_s()
+assert taches.attente_estimee_s("file-0") >= moyenne, \
+    "même seul dans la file, on attend la durée d'une génération"
+assert round(taches.attente_estimee_s("file-0") / 10) * 10 > 0, \
+    "l'estimation ne doit jamais s'arrondir à zéro"
 
 # EX-IA-32 — le temps écoulé depuis la mise en file, non la durée de l'appel.
 ecoule = taches.secondes_depuis_mise_en_file("file-3")
@@ -300,6 +307,20 @@ assert ecoule is not None and ecoule >= 0
 # Une tâche en cours occupe un fil : elle précède, donc elle est première.
 prise = taches.reclamer()
 assert taches.position(prise.objet_uuid) == 1
+
+# Les fils servent par fournées : les huit premiers ensemble, puis les
+# suivants. File vidée d'abord, sans quoi les tâches précédentes décaleraient
+# les rangs et l'assertion mesurerait autre chose que ce qu'elle annonce.
+vider()
+taches.enregistrer_traitant("conversion_image", lambda o: None)
+for i in range(20):
+    taches.mettre_en_file("conversion_image", f"fournee-{i}")
+assert taches.position("fournee-0") == 1 and taches.position("fournee-19") == 20
+assert taches.attente_estimee_s("fournee-0") == taches.attente_estimee_s("fournee-3"), \
+    "deux rangs de la même fournée attendent autant"
+assert (taches.attente_estimee_s("fournee-19")
+        > taches.attente_estimee_s("fournee-0")), \
+    "une fournée plus loin, on attend plus longtemps"
 
 # Aucune durée mesurée : la valeur par défaut sert, sans mentir sur sa nature.
 vider()

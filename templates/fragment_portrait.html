@@ -17,14 +17,17 @@
          qu'on renvoie à 22 h 30 ne revient pas. EX-IA-32 — le temps affiché
          est celui réellement écoulé depuis la validation, file et tentatives
          échouées comprises. #}
+      {# L'arrondi ne descend jamais sous dix secondes : « environ 0 secondes »
+         pendant qu'une génération tourne serait pire que pas de chiffre. #}
+      {% set annonce = [10, (attente_s / 10) | round | int * 10] | max if attente_s else 0 %}
       {% if position and position > 1 %}
         <p class="discret">{{ position }}<sup>e</sup> dans la file.
-          {% if attente_s %}Environ {{ (attente_s / 30) | round | int * 30 }} secondes.{% endif %}
+          {% if annonce %}Environ {{ annonce }} secondes.{% endif %}
         </p>
-      {% elif attente_s %}
-        <p class="discret">Environ {{ (attente_s / 10) | round | int * 10 }} secondes.</p>
+      {% elif annonce %}
+        <p class="discret">Environ {{ annonce }} secondes.</p>
       {% else %}
-        <p class="discret">Une dizaine de secondes.</p>
+        <p class="discret">Une trentaine de secondes.</p>
       {% endif %}
       {% if ecoule_s and ecoule_s > 45 %}
         <p class="discret">Vous patientez depuis {{ ecoule_s }} secondes. Rien

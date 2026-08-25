@@ -14,6 +14,13 @@ import httpx
 
 URL_API = "https://api.anthropic.com/v1/messages"
 MODELE_DEFAUT = "claude-sonnet-5"
+# Borne, jamais facturée (EX-IA-34). Le modèle et ce plafond sont des
+# PARAMÈTRES REÇUS, lus par l'appelant dans le bloc `ia:` du config.yaml du
+# projet (section 4.6, EX-ADM-02). Ils ne sont plus lus dans
+# l'environnement : deux sources pour une valeur, c'est le défaut du
+# 25 août. Les valeurs ci-dessous ne servent qu'au repli de développement,
+# qui n'a pas de config.yaml.
+JETONS_MAX_DEFAUT = 8000
 
 
 class ErreurGeneration(Exception):
@@ -303,7 +310,7 @@ def generer(config: dict, participation: dict) -> dict:
     if not cle:
         raise ErreurDefinitive("ANTHROPIC_API_KEY absente de l'environnement")
 
-    modele = os.environ.get("MODELE_IA", MODELE_DEFAUT)
+    modele = participation.get("modele") or MODELE_DEFAUT
     invite = _construire_message(config, participation)
     corps = {
         "model": modele,
@@ -312,7 +319,7 @@ def generer(config: dict, participation: dict) -> dict:
         # vient donc pas de la longueur du portrait et ne se corrige pas en le
         # raccourcissant. Le plafond borne sans facturer : le mettre large ne
         # coûte rien.
-        "max_tokens": 8000,
+        "max_tokens": participation.get("jetons_max") or JETONS_MAX_DEFAUT,
         "system": config["contrat"],
         "messages": [{"role": "user", "content": invite}],
     }

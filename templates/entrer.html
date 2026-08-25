@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Le Livre des Convoqués</p>
+  <h1>Le Conseil vous attend</h1>
+  <p>Le mot de passe figure sur le carton posé sur votre table.</p>
+
+  {% if erreur %}
+    <p class="erreur">{{ erreur }}</p>
+  {% endif %}
+
+  <form method="post" action="/entrer">
+    <input type="hidden" name="vers" value="{{ vers }}">
+    {# `autocapitalize` et `autocorrect` : sur iOS, le clavier met une
+       majuscule d'office et corrige le mot en un autre. La saisie est
+       normalisée côté serveur (EX-AUTH-07), mais voir son mot de passe
+       réécrit sous ses yeux fait douter avant même d'appuyer. #}
+    <p><input type="text" name="mot_de_passe" placeholder="Mot de passe"
+              maxlength="60" required autofocus
+              autocomplete="off" autocapitalize="none"
+              autocorrect="off" spellcheck="false"></p>
+    <button class="action" type="submit">Entrer</button>
+  </form>
+</div>
+{% endblock %}

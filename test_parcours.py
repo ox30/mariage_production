@@ -3,10 +3,12 @@ import base64, os, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 os.environ["MOT_DE_PASSE_ADMIN"] = "secret"
 from fastapi.testclient import TestClient
+import test_outils
 import main, base_donnees as bd, taches
 
 import contextlib
-ctx = TestClient(main.app); ctx.__enter__(); c = ctx
+# La porte du mot de passe unique est franchie une fois ici (EX-AUTH-18).
+ctx = test_outils.client(main.app); c = ctx
 assert c.get("/").status_code == 200, "accueil"
 r = c.post("/questionnaire", data={"prenom": "Florian", "nom": "Test"})
 assert r.status_code == 200 and "Quel est ton métier" in r.text, "questionnaire"
@@ -70,7 +72,7 @@ import importlib
 os.environ["PRENOM_MARIEE"] = "Solène"
 os.environ["PRENOM_MARIE"] = "Gaspard"
 importlib.reload(main)
-c2 = TestClient(main.app); c2.__enter__()
+c2 = test_outils.client(main.app)
 
 r = c2.post("/questionnaire", data={"prenom": "Ana", "nom": "Test"})
 assert "Solène" in r.text and "Gaspard" in r.text, "prénoms substitués dans les libellés"
@@ -351,9 +353,42 @@ assert "LONGUEUR IMPOSÉE : 220 mots" in long_
 assert "Exploite-les toutes" in long_, "à douze réponses, plus de tri à opérer"
 assert "laisse les autres" not in long_
 
+# EX-IA-34 — le plafond de jetons est une BORNE, jamais une facturation : le
+# compteur de sortie n'a aucun rapport avec le nombre de mots visibles, et
+# raccourcir le portrait ne prévient pas la troncature. Il valait 8000 en dur ;
+# depuis l'étape 2 c'est un paramètre reçu, lu dans `ia.jetons_max` du
+# config.yaml du projet. L'assertion suit le déplacement : ce qu'on éprouve,
+# c'est que la valeur de l'appelant est celle qui part, et que le repli reste
+# large.
 assert ia.MODELE_DEFAUT == "claude-sonnet-5"
-import inspect
-assert '"max_tokens": 8000' in inspect.getsource(ia.generer)
+assert ia.JETONS_MAX_DEFAUT == 8000
+import httpx as _httpx
+_envoye = {}
+_vrai_post = _httpx.post
+
+
+def _post_espion(url, json=None, headers=None, timeout=None):
+    _envoye.update(json or {})
+    raise _httpx.ConnectTimeout("interrompu après capture")
+
+
+_httpx.post = _post_espion
+os.environ["ANTHROPIC_API_KEY"] = "cle-de-test"
+try:
+    for envoi, attendu in ((None, 8000), (1234, 1234)):
+        _envoye.clear()
+        try:
+            ia.generer(main.CONFIG, {"lieu": comte, "reponses": {"metier": "x"},
+                                     "noms_interdits": [], "couple": main.COUPLE,
+                                     "modele": "modele-passe",
+                                     "jetons_max": envoi})
+        except ia.ErreurGeneration:
+            pass
+        assert _envoye.get("max_tokens") == attendu, _envoye.get("max_tokens")
+        assert _envoye.get("model") == "modele-passe", _envoye.get("model")
+finally:
+    _httpx.post = _vrai_post
+    os.environ.pop("ANTHROPIC_API_KEY", None)
 print("TOUT PASSE — longueur adaptée au volume")
 
 # --- Le vœu est au premier étage, et n'atteint jamais le modèle -------------

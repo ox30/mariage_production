@@ -77,6 +77,35 @@ Le dépôt est alimenté par un **client Git**, jamais par le dépôt de fichier
 l'interface web de GitHub : les fichiers cachés y passent à la trappe, et
 `.gitignore`, `.env.example` et `.dockerignore` en ont fait les frais.
 
+## Les trois classes de secret
+
+La ligne de partage n'est pas *fichier contre environnement*, c'est **ce qui
+s'imprime sur un carton contre ce qui ne s'imprime jamais**.
+
+| Secret | Où | Pourquoi |
+|---|---|---|
+| `ANTHROPIC_API_KEY`, `MOT_DE_PASSE_ADMIN`, identifiants du stockage objet | environnement | jamais imprimés, ne suivent pas le projet (`EX-SEC-09`, `EX-SAU-22`) |
+| mot de passe d'accès, mot de passe des mariés | `acces:` du `config.yaml` du projet | s'impriment sur les cartons, suivent le projet, réglables avant ouverture (`EX-SEC-09`, `EX-ADM-02`) |
+| code du Gardien | base | généré par l'application, un par projet (`EX-AUTH-08`) |
+
+Le mot de passe d'accès **ne va pas dans l'environnement**, et c'est délibéré.
+Un seul service Railway sert la répétition puis le mariage, et la bascule se
+fait par `projet-actif.txt` : une variable d'environnement vit au-dessus du
+projet, donc le mot de passe des essais resterait valable le 5 septembre sans
+que rien ne le signale. C'est le défaut du 25 août — deux endroits qui
+déclarent une chose apparentée sans obligation de s'accorder. S'y ajoutent
+`EX-ADM-08`, qui veut sa génération et son export imprimable, ce qu'aucune
+variable Railway ne permet, et le fait que l'archive d'administration emporte
+déjà la base, donc déjà le code du Gardien : le gain de protection n'existait
+pas.
+
+**Le cookie d'accès est l'empreinte du mot de passe en vigueur.** Aucun état
+serveur, et changer le mot de passe referme toutes les sessions d'un coup — ce
+qui est le comportement voulu, mais qu'il faut savoir : le modifier à 21 h 30
+oblige toute la salle à ressaisir. Le mot de passe est écrit au journal de
+démarrage **en clair** : il est sur vingt cartons, ce n'est pas un secret, et
+c'est ce qui rend la bascule vérifiable d'un coup d'œil.
+
 ## Échouer plutôt que se replier
 
 Un repli silencieux se paie plus tard et plus cher. Le démarrage échoue
@@ -114,6 +143,9 @@ un nom non.
 | `test_instantane.py` | VACUUM INTO, dépôts doublés, sonde, aucune purge |
 | `test_modeles.py` | schéma, compteurs dérivés, contraintes d'unicité |
 | `test_affichage.py` | rendu, échappement, appariement des lieux |
+| `test_acces.py` | porte fermée par défaut, cookie, en-têtes, refus au démarrage |
+
+`test_outils.py` n'est pas un test : il porte `client()`, qui ouvre le cycle de vie et franchit la porte — **après avoir vérifié qu'elle était fermée**. Sans ce contrôle, le jour où la porte ne fermerait plus rien, toute la suite continuerait de passer.
 
 Le chemin d'échec est testé, pas seulement le chemin heureux.
 
@@ -254,7 +286,9 @@ identique, et un échec des deux destinations serait pris pour un succès.
 
 | Écart | Raison | Échéance |
 |---|---|---|
-| `ia.py` lit le modèle dans `MODELE_IA`, alors que la section 4.6 le place dans `config.yaml` | `EX-ADM-02` veut le modèle réglable avant ouverture, donc dans `config.yaml`. À déplacer quand `config.yaml` sera lu en entier | étape 2 |
+| `EX-I18N-01` — aucun texte affiché n'est externalisé | `EX-I18N-02` est retirée, la langue est `fr`, aucune seconde langue n'est prévue, et l'événement est dans onze jours. Le bénéfice invoqué — corriger un libellé sans redéployer — ne s'obtiendrait pas avec un fichier de textes dans le dépôt : il faudrait le porter sur le volume avec toute la mécanique d'empreinte de `questions.yaml` | aucune |
+| `EX-SEC-05` — la porte ne compte pas les échecs par adresse IP | cent invités sur le wifi de la salle, ou derrière le NAT d'un même opérateur, partagent une adresse publique : un verrou par IP transformerait dix fautes de frappe en panne collective à 21 h. Remplacé par un délai d'une demi-seconde après échec, qui ralentit une énumération sans jamais fermer la porte à quelqu'un qui a le carton sous les yeux | accepté tel quel |
+| La CSP autorise `'unsafe-inline'` sur `script-src` | l'accueil, le questionnaire et le fragment de portrait portent leur comportement en `<script>` inline. Les extraire à onze jours de l'événement coûterait plus de risque qu'il n'en retire, et le rempart contre l'injection reste l'échappement Jinja2 (`EX-SEC-02`), qui est actif. Les nonces sont la bonne réponse, après l'événement | après l'événement |
 | `config.py` ne valide que le bloc `projet:` ; `acces`, `quotas`, `ia`, `tables` sont exposés bruts | valider une forme avant d'avoir écrit le code qui la consomme, c'est la deviner | étape 2 |
 | Le contrôle `EX-SEC-18` se met en veille si `PRENOM_MARIEE` et `PRENOM_MARIE` sont absents de l'environnement | c'est le seul dessin qui n'exige pas d'écrire les prénoms dans un fichier versionné. Le garde-fou est l'exécution locale avec le `.env` chargé ; il n'y a pas d'intégration continue dans ce projet | accepté tel quel |
 | `etat_soiree` a une clé primaire entière et non un UUID (`EX-GEN-02`) | table à une seule ligne : une clé UUID n'y apporte rien et retire la garantie qui compte, qu'il n'y ait jamais deux phases simultanées. La contrainte `id = 1` le dit | accepté tel quel |

@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import secrets
 from contextlib import asynccontextmanager
+from urllib.parse import quote, urlparse
 
 import yaml
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -28,6 +29,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import acces
 import base_donnees as bd
 import config
 import depot_objet
@@ -78,6 +80,11 @@ async def cycle_de_vie(_: FastAPI):
     # Une ligne par démarrage, dont l'empreinte de questions.yaml : c'est la
     # seule chose qui aurait révélé la configuration périmée du 17 août.
     print(config.resume_demarrage(), flush=True)
+    # EX-AUTH-18 — sans mot de passe, la soirée est ouverte à tous ou fermée à
+    # tous. Le refus est ici et non à la première requête : découvrir à 21 h
+    # que le `config.yaml` déposé n'en portait pas serait le pire moment.
+    acces.verifier_au_demarrage()
+    print(acces.resume(), flush=True)
     bd.initialiser()
     fils = taches.demarrer()
     print(f"worker          : {fils} fil(s) démarré(s), limite courante "
@@ -95,6 +102,63 @@ async def cycle_de_vie(_: FastAPI):
 
 
 app = FastAPI(title="Le Livre des Convoqués", lifespan=cycle_de_vie)
+
+# --------------------------------------------------------------------------- #
+# La porte et les en-têtes (EX-AUTH-18, EX-SEC-04, EX-SEC-07, EX-SEC-08)
+# --------------------------------------------------------------------------- #
+
+# **Fermé par défaut, ouvert par liste.** Un middleware plutôt qu'un `Depends`
+# sur chaque route : une route ajoutée plus tard est protégée d'office. Une
+# liste de routes à protéger aurait laissé passer celle qu'on oublie d'y
+# inscrire, et masquer un bouton n'est pas une protection (EX-SEC-04).
+#
+# Les chemins d'administration sont hors de la porte parce qu'ils ont la leur —
+# HTTPBasic sur `MOT_DE_PASSE_ADMIN` (EX-ADM-01). Faire saisir à
+# l'administrateur le mot de passe des invités en plus du sien n'ajouterait
+# rien à ce qu'il peut déjà faire.
+CHEMINS_LIBRES = ("/entrer", "/static/", "/tableau", "/deviner", "/sante")
+
+
+def _hors_porte(chemin: str) -> bool:
+    return any(chemin == c or chemin.startswith(c.rstrip("/") + "/")
+               or chemin.startswith(c) for c in CHEMINS_LIBRES)
+
+
+@app.middleware("http")
+async def porte_et_entetes(request: Request, appel_suivant):
+    chemin = request.url.path
+    if not _hors_porte(chemin) and not acces.cookie_valide(
+            request.cookies.get(acces.NOM_COOKIE)):
+        # `vers` conserve la destination : celui qui ouvre le lien de son
+        # portrait depuis un message doit y arriver, pas atterrir à l'accueil.
+        cible = chemin + (f"?{request.url.query}" if request.url.query else "")
+        reponse = RedirectResponse(
+            f"/entrer?vers={quote(cible, safe='')}", status_code=303)
+    else:
+        reponse = await appel_suivant(request)
+
+    # EX-SEC-08. `unsafe-inline` sur les scripts est un écart assumé : le
+    # questionnaire, l'accueil et le fragment de portrait portent leur
+    # comportement en `<script>` inline, et les extraire à onze jours de
+    # l'événement coûterait plus de risque qu'il n'en retire. Le rempart contre
+    # l'injection reste l'échappement Jinja2 (EX-SEC-02), qui est actif.
+    # `fonts.googleapis.com` et `fonts.gstatic.com` sont les seules origines
+    # tierces restantes ; htmx est servi depuis /static.
+    reponse.headers.setdefault("Content-Security-Policy", (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "base-uri 'none'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"))
+    reponse.headers.setdefault("X-Content-Type-Options", "nosniff")
+    reponse.headers.setdefault("Referrer-Policy", "same-origin")
+    return reponse
+
+
 app.mount("/static", StaticFiles(directory=os.path.join(RACINE, "static")), name="static")
 gabarits = Jinja2Templates(directory=os.path.join(RACINE, "templates"))
 gabarits.env.autoescape = True
@@ -135,6 +199,8 @@ EMPREINTE_QUESTIONS = config.empreinte(config.projet().chemin_questions)
 
 gabarits.env.globals["empreinte_style"] = config.empreinte(
     Path(RACINE) / "static" / "style.css")
+gabarits.env.globals["empreinte_htmx"] = config.empreinte(
+    Path(RACINE) / "static" / "htmx.min.js")
 
 # L'étage se déduit des réponses présentes (EX-QUE-11) ; `base_donnees` n'a pas
 # à relire questions.yaml pour savoir lesquelles relèvent du second étage.
@@ -196,6 +262,12 @@ def _generer_chronique(identifiant: str) -> None:
                 "genre": ligne.genre,
                 "motif_reprise": _motifs_en_attente.pop(identifiant, None),
                 "couple": COUPLE,
+                # Section 4.6 — le modèle et le plafond viennent du bloc `ia:`
+                # du config.yaml du projet, relus à chaud (EX-ADM-02,
+                # EX-IA-20). L'écart « lu dans MODELE_IA » se referme ici.
+                "modele": config.parametre("ia.modele", ia.MODELE_DEFAUT),
+                "jetons_max": config.parametre("ia.jetons_max",
+                                               ia.JETONS_MAX_DEFAUT),
             },
         )
     except ia.ErreurGeneration as exc:
@@ -251,6 +323,58 @@ def _reponses_du_formulaire(donnees: dict, bloc: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Parcours invité
 # --------------------------------------------------------------------------- #
+
+def _destination_sure(vers: str | None) -> str:
+    """Ne renvoie qu'un chemin **de ce site**.
+
+    Sans ce filtre, `/entrer?vers=https://ailleurs` ferait de la porte un
+    tremplin : on saisit le mot de passe du mariage et on se retrouve sur un
+    site tiers, avec la confiance de celui qui vient de s'authentifier.
+    """
+    if not vers or not vers.startswith("/") or vers.startswith("//"):
+        return "/"
+    # L'antislash est le trou que le contrôle précédent laisse ouvert :
+    # `/\ailleurs.example` commence bien par une seule barre, et `urlparse` n'y
+    # voit aucun hôte — mais les navigateurs normalisent `\` en `/` avant de
+    # suivre l'en-tête, ce qui en fait `//ailleurs.example`, donc un site tiers.
+    # Trouvé en réintroduisant le défaut : le test d'origine ne le voyait pas,
+    # ses trois cas hostiles étaient tous arrêtés par le contrôle suivant.
+    if "\\" in vers:
+        return "/"
+    if urlparse(vers).netloc or urlparse(vers).scheme:
+        return "/"
+    return vers
+
+
+@app.get("/entrer", response_class=HTMLResponse)
+def entrer(request: Request, vers: str = "/"):
+    """EX-AUTH-18 — le mot de passe unique, imprimé sur les cartons."""
+    if acces.cookie_valide(request.cookies.get(acces.NOM_COOKIE)):
+        return RedirectResponse(_destination_sure(vers), status_code=303)
+    return gabarits.TemplateResponse(
+        "entrer.html",
+        {"request": request, "vers": _destination_sure(vers), "erreur": None})
+
+
+@app.post("/entrer")
+async def valider_entree(request: Request):
+    donnees = dict(await request.form())
+    vers = _destination_sure(donnees.get("vers"))
+    if not acces.correspond(donnees.get("mot_de_passe") or ""):
+        acces.freiner()
+        # EX-AUTH-11 — le message dit quoi faire, pas seulement que c'est
+        # raté. Le carton est sur la table : le rappeler vaut mieux que
+        # « Mot de passe incorrect ».
+        return gabarits.TemplateResponse(
+            "entrer.html",
+            {"request": request, "vers": vers,
+             "erreur": "Ce n'est pas le bon mot. Il est écrit sur le carton "
+                       "posé sur votre table."},
+            status_code=401)
+    reponse = RedirectResponse(vers, status_code=303)
+    acces.poser_cookie(reponse, request.headers)
+    return reponse
+
 
 @app.get("/", response_class=HTMLResponse)
 def accueil(request: Request):

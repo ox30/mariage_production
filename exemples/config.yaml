@@ -6,10 +6,11 @@
 # rafraîchie a déjà fait tourner l'application des heures sur une configuration
 # périmée, sans message d'erreur (EX-ARC-19).
 #
-# ÉTAT — les blocs `projet:`, `worker:` et `sauvegarde:` sont lus. `acces:`,
-# `quotas:`, `ia:`, `tables:` et `table_test:` sont donnés pour mémoire,
-# conformément à la section 4.6 du cahier des charges ; ils seront consommés à
-# l'étape 2. En cas de divergence, c'est la section 4.6 qui fait foi.
+# ÉTAT — les blocs `projet:`, `acces:` (mot_de_passe), `ia:`, `worker:` et
+# `sauvegarde:` sont lus. `quotas:`, `tables:` et `table_test:` sont donnés
+# pour mémoire, conformément à la section 4.6 du cahier des charges ; ils
+# seront consommés plus loin dans l'étape 2. En cas de divergence, c'est la
+# section 4.6 qui fait foi.
 
 projet:
   # PAS d'`identifiant` ici : le NOM DU DOSSIER fait autorité. Ce champ a
@@ -30,6 +31,11 @@ projet:
 # Le mot de passe d'accès n'est pas haché : il est imprimé sur des cartons et
 # l'administrateur doit pouvoir le relire (EX-SEC-09). Un mot simple en
 # minuscules, saisissable au doigt dans une lumière tamisée (EX-AUTH-07).
+#
+# `a-definir` est REFUSÉE AU DÉMARRAGE. Un config.yaml recopié depuis cet
+# exemple et jamais relu est le mode de fabrication normal d'un fichier de
+# projet — c'est ce qui a envoyé les sauvegardes sous un préfixe orphelin le
+# 25 août. Laisser passer la valeur d'exemple ouvrirait la soirée à tous.
 acces:
   mot_de_passe: "a-definir"
   mot_de_passe_maries: "a-definir"      # QR code dédié (EX-AUTH-20)

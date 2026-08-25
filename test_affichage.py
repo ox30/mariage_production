@@ -4,8 +4,10 @@ import base64, os, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 os.environ["MOT_DE_PASSE_ADMIN"] = "secret"
 from fastapi.testclient import TestClient
+import test_outils
 import main, base_donnees as bd
-ctx = TestClient(main.app); ctx.__enter__(); c = ctx
+# La porte du mot de passe unique est franchie une fois ici (EX-AUTH-18).
+ctx = test_outils.client(main.app); c = ctx
 
 uid = bd.creer("Marie", "Dupont", {"metier": "infirmière", "attachement": "Ma famille"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid, {

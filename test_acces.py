@@ -153,6 +153,119 @@ finally:
     config.projet = _vrai_projet
 print("TOUT PASSE — le démarrage refuse un mot de passe absent, vide ou d'exemple")
 
+# --- Une configuration refusée laisse le service DEBOUT, sans rien servir ---
+# Le 25 août, le refus de démarrer a rendu le volume inatteignable — donc le
+# fichier fautif incorrigible. Ce qu'on éprouve ici : le service répond, il dit
+# quoi corriger, et il n'a RIEN fait d'autre.
+import panne, taches
+
+_vrai_controle = acces.verifier_au_demarrage
+_vrai_demarrer = taches.demarrer
+_demarrages = []
+taches.demarrer = lambda *a, **k: _demarrages.append(1) or 0
+
+
+def _refuser():
+    raise config.ErreurConfiguration(
+        "`acces.mot_de_passe` est absent du config.yaml du projet "
+        "« 2026-09-05-court-mariage ». L'ajouter dans "
+        "/data/projets/2026-09-05-court-mariage/config.yaml.")
+
+
+acces.verifier_au_demarrage = _refuser
+try:
+    en_panne = TestClient(main.app, follow_redirects=False)
+    en_panne.__enter__()
+    try:
+        assert main.PANNE is not None, "le drapeau de panne n'a pas été posé"
+        # Toutes les routes, la porte comprise : un écran de mot de passe qui
+        # n'ouvre sur rien ferait croire à un mot de passe erroné.
+        for chemin in ("/", "/entrer", "/portrait/abc", "/bonus/x", "/fin"):
+            r = en_panne.get(chemin)
+            assert r.status_code == 503, f"{chemin} a répondu {r.status_code}"
+            assert "config.yaml" in r.text, chemin
+            assert "2026-09-05-court-mariage" in r.text, chemin
+        r = en_panne.post("/valider", data={"prenom": "X", "nom": "Y"})
+        assert r.status_code == 503, r.status_code
+        # Et surtout : rien n'a démarré. Une migration appliquée à une base
+        # dont on ne sait plus si elle est au bon endroit serait pire que
+        # l'arrêt.
+        assert not _demarrages, "le worker a démarré alors que la config est refusée"
+    finally:
+        en_panne.__exit__(None, None, None)
+finally:
+    acces.verifier_au_demarrage = _vrai_controle
+    taches.demarrer = _vrai_demarrer
+    main.PANNE = None
+
+# La page de panne ne dépend d'aucun gabarit ni d'aucune configuration : c'est
+# la seule façon qu'elle a de s'afficher quand la configuration est en cause.
+# Contrôlé sur les IMPORTS et non par recherche de chaîne : le premier jet
+# cherchait « empreinte » dans le fichier entier et tombait sur le mot écrit
+# dans un commentaire. Un test qui échoue sur un commentaire n'éprouve pas la
+# dépendance, il éprouve la prose.
+import ast
+_arbre = ast.parse(pathlib.Path("panne.py").read_text(encoding="utf-8"))
+_importes = set()
+for noeud in ast.walk(_arbre):
+    if isinstance(noeud, ast.Import):
+        _importes |= {a.name.split(".")[0] for a in noeud.names}
+    elif isinstance(noeud, ast.ImportFrom) and noeud.module:
+        _importes.add(noeud.module.split(".")[0])
+_du_projet = {"config", "main", "base_donnees", "modeles", "ia", "noms",
+              "taches", "instantane", "depot_objet", "acces"}
+assert not (_importes & _du_projet), \
+    f"panne.py dépend de {_importes & _du_projet} — donc de ce qui est en panne"
+assert "&lt;script&gt;" in panne.page("<script>alert(1)</script>"), "message non échappé"
+
+# Le point d'entrée d'uvicorn passe par serveur.py, qui attrape le second
+# moment où une ErreurConfiguration peut sortir : l'import de `main`.
+# Sur la LIGNE CMD et non dans le fichier entier : le commentaire qui explique
+# le choix contient lui aussi « serveur:app », et l'assertion passait donc même
+# après être revenue à `main:app`. Deuxième occurrence de la même faute dans
+# cette session, après le contrôle des dépendances de panne.py.
+_cmd = [l for l in pathlib.Path("Dockerfile").read_text(encoding="utf-8").splitlines()
+        if l.lstrip().startswith("CMD")]
+assert len(_cmd) == 1, f"{len(_cmd)} lignes CMD dans le Dockerfile"
+assert "serveur:app" in _cmd[0], \
+    f"le Dockerfile doit lancer serveur:app, sinon les erreurs d'import tuent : {_cmd[0]}"
+assert "main:app" not in _cmd[0], _cmd[0]
+assert "from main import app" in pathlib.Path("serveur.py").read_text(encoding="utf-8")
+print("TOUT PASSE — une configuration refusée laisse le service debout et réparable")
+
+# --- Une configuration refusée s'écrit en clair, sans trace ----------------
+# Constaté sur Railway le 25 août : le message utile sortait sous douze lignes
+# de trace, onze fois de suite. Ce qu'on éprouve ici, c'est que le texte de
+# l'exception se retrouve INTÉGRALEMENT dans le bloc — un repliage qui perdrait
+# un mot ferait disparaître le chemin du fichier à corriger.
+# Le message RÉEL de l'incident du 25 août, et non un raccourci : trop court,
+# il ne produisait que trois lignes et n'exerçait donc jamais le repliage —
+# l'assertion existait, le cas de test ne l'atteignait pas.
+message = ("`acces.mot_de_passe` vaut encore « a-definir », la valeur de "
+           "exemples/config.yaml. Un fichier recopié depuis l'exemple et "
+           "jamais relu a déjà envoyé les sauvegardes sous un préfixe "
+           "orphelin le 25 août (EX-PRJ-13) ; ici il ouvrirait la soirée avec "
+           "un mot de passe public. En poser un vrai dans "
+           "/data/projets/2026-08-19-repetition/config.yaml.")
+bloc = config.bloc_erreur(config.ErreurConfiguration(message))
+assert "CONFIGURATION REFUSÉE" in bloc
+# Le libellé doit dire l'état RÉEL : depuis le mode panne, le service démarre.
+# « ne démarrera pas » enverrait chercher un crash qui n'a pas lieu.
+assert "ne démarrera pas" not in bloc, "libellé périmé depuis le mode panne"
+assert "ne sert rien" in bloc
+for mot in message.split():
+    assert mot in bloc, f"« {mot} » perdu au repliage"
+largeurs = {len(l) for l in bloc.splitlines() if l.startswith(("┌", "│", "├", "└"))}
+assert len(largeurs) == 1, f"cadre irrégulier : {sorted(largeurs)}"
+# Multiligne : les messages de config.py en portent, et un repliage naïf
+# collerait deux paragraphes l'un à l'autre.
+assert config.bloc_erreur(config.ErreurConfiguration("un\n\ndeux")).count("\n") >= 7
+# Un mot plus long que le cadre — chemin, URL — est coupé et non laissé
+# déborder : sinon la bordure se décale au milieu du message.
+long_ = config.bloc_erreur(config.ErreurConfiguration("chemin " + "x" * 200))
+assert len({len(l) for l in long_.splitlines() if l.startswith(("┌", "│", "├", "└"))}) == 1
+print("TOUT PASSE — une configuration refusée s'écrit en clair, sans trace")
+
 # --- Le modèle vient de config.yaml, plus de l'environnement ---------------
 import ia
 assert "MODELE_IA" not in pathlib.Path("ia.py").read_text(encoding="utf-8"), \

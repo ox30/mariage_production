@@ -124,8 +124,50 @@ monté et qu'`EXIGER_VOLUME` ne l'interdit pas. Bloquer le démarrage sur une
 convention de nommage le 4 septembre à 21 h serait la pire façon de faire
 respecter une règle cosmétique.
 
+### Échouer ne veut pas dire mourir
+
+**Aucun de ces refus ne tue le processus.** Le service démarre, ne sert
+**rien**, et répond `503` sur toutes les routes avec le texte de ce qu'il faut
+corriger — `panne.py`, branché par `serveur.py` et par le drapeau `main.PANNE`.
+
+*Payé le 25 août.* Le contrôle du mot de passe a refusé un `config.yaml`
+portant la valeur d'exemple ; le service est entré en redémarrage perpétuel, et
+l'explorateur de fichiers de Railway passe par le conteneur. **Le fichier à
+corriger n'était plus atteignable parce que le service refusait de démarrer à
+cause de ce fichier.** Blocage circulaire, sortie uniquement par retour au
+déploiement précédent.
+
+Le défaut ne tenait pas au mot de passe : les sept refus ci-dessus portent tous
+sur des fichiers du volume et avaient chacun le même piège. Le 5 septembre, un
+redémarrage de conteneur — resize de volume, mise à jour d'infrastructure — sur
+une configuration momentanément mal formée aurait coûté la soirée sans recours.
+
+« Échouer plutôt que se replier » voulait dire **ne pas faire semblant de
+marcher**, pas mourir. Un service qui dit ce qu'il faut corriger et n'exécute
+ni migration, ni worker, ni instantané n'est replié en rien : il est visiblement
+en panne, et il reste réparable.
+
+Deux points de capture, parce qu'une `ErreurConfiguration` sort à deux moments :
+à l'**import de `main`** — `config.projet()` y est appelé au niveau module —
+attrapé par `serveur.py`, et au **cycle de vie**, attrapé par `cycle_de_vie`.
+D'où `CMD ["…", "uvicorn serveur:app …"]` et non `main:app`.
+
+`panne.py` n'importe **aucun module du projet** et n'emploie ni gabarit ni
+feuille de style : une page de panne qui dépend de ce qui est en panne ne
+s'affiche jamais. Le contrôle se fait sur les imports réels, par `ast`.
+
 Chaque démarrage écrit un résumé au journal, **empreinte de `questions.yaml`
 comprise**. Une ligne contre plusieurs heures de recherche.
+
+**Une configuration refusée s'écrit comme une consigne, pas comme un bug.**
+`config.bloc_erreur()` encadre le message et le rend lisible sans dérouler de
+trace. Constaté sur Railway le 25 août : le message qui disait quoi corriger
+sortait sous douze lignes de trace Python, répétées onze fois par le
+redémarrage en boucle. La trace n'apprend rien — ce n'est pas le programme qui
+est en défaut, c'est un fichier à corriger — et elle enterre la seule ligne
+utile, au moment précis où le service est à terre et où l'on cherche vite.
+Capturé aux deux endroits d'où une `ErreurConfiguration` peut sortir : à
+l'import de `main`, et au cycle de vie.
 
 ## Tests
 
@@ -229,6 +271,19 @@ toujours sous cette forme.*
 **Attendre le fil avant de mesurer.** Les générations partent en arrière-plan.
 Une mesure prise juste après la requête constate l'état d'avant le travail
 qu'elle prétend vérifier. Le helper `_attendre(condition)` sert à ça.
+
+**Une assertion qui cherche une chaîne dans un fichier entier peut être
+satisfaite par un commentaire.** Deux fois le 25 août : `« empreinte » not in
+panne.py` échouait sur le mot écrit dans une explication, et `« serveur:app »
+in Dockerfile` passait encore après retour à `main:app`, parce que le
+commentaire qui justifiait le choix contenait la chaîne. Contrôler la
+**structure** — les imports par `ast`, la ligne `CMD` isolée — et non le texte.
+
+**Un cas de test trop petit n'exerce pas l'assertion qu'il porte.** Le message
+d'essai du bloc d'erreur était trop court pour produire assez de lignes : le
+repliage n'était jamais atteint, et l'assertion qui le surveillait ne pouvait
+pas échouer. Les cas de test reprennent depuis les **messages réels** des
+incidents.
 
 Et toute assertion nouvelle se vérifie **dans les deux sens** : on réintroduit
 le défaut et on regarde le test tomber. Un test qui ne peut pas échouer ne

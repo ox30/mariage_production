@@ -463,6 +463,51 @@ def parametre(chemin: str, defaut=None):
 # Résumé de démarrage
 # --------------------------------------------------------------------------- #
 
+def bloc_erreur(exc: Exception) -> str:
+    """Une erreur de configuration écrite comme une consigne, pas comme un bug.
+
+    Constaté le 25 août sur Railway : le message qui dit quoi faire sortait
+    sous douze lignes de trace Python, répétées onze fois par le redémarrage
+    en boucle. La trace n'apprend rien — ce n'est pas un défaut du programme,
+    c'est un fichier à corriger — et elle enterre la seule ligne utile.
+
+    Même raison d'être que le résumé de démarrage : une ligne lisible contre
+    plusieurs minutes de défilement, au moment précis où le service est à
+    terre et où l'on cherche vite.
+    """
+    largeur = 78
+    lignes = [
+        "",
+        "┌" + "─" * largeur + "┐",
+        "│ CONFIGURATION REFUSÉE — le service démarre, mais ne sert rien".ljust(largeur + 1) + "│",
+        "├" + "─" * largeur + "┤",
+    ]
+    for paragraphe in str(exc).split("\n"):
+        mots, courante = paragraphe.split(" "), ""
+        if not paragraphe.strip():
+            lignes.append("│" + " " * largeur + "│")
+            continue
+        for mot in mots:
+            # Un mot plus long que le cadre — un chemin, une URL — est coupé
+            # plutôt que laissé déborder : une bordure qui se décale au milieu
+            # du message donne l'impression d'un affichage cassé, et c'est
+            # précisément le moment où l'on veut être rassuré sur ce qu'on lit.
+            while len(mot) > largeur - 2:
+                if courante:
+                    lignes.append("│ " + courante.ljust(largeur - 1) + "│")
+                    courante = ""
+                lignes.append("│ " + mot[:largeur - 2].ljust(largeur - 1) + "│")
+                mot = mot[largeur - 2:]
+            if len(courante) + len(mot) + 1 > largeur - 2:
+                lignes.append("│ " + courante.ljust(largeur - 1) + "│")
+                courante = mot
+            else:
+                courante = f"{courante} {mot}".strip()
+        lignes.append("│ " + courante.ljust(largeur - 1) + "│")
+    lignes += ["└" + "─" * largeur + "┘", ""]
+    return "\n".join(lignes)
+
+
 def resume_demarrage() -> str:
     """Les quelques lignes à écrire au journal au `lifespan`.
 

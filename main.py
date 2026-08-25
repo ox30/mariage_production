@@ -36,6 +36,7 @@ import depot_objet
 import ia
 import instantane
 import noms
+import panne
 import taches
 
 RACINE = os.path.dirname(os.path.abspath(__file__))
@@ -69,21 +70,47 @@ def _substituer(valeur):
 # EX-PRJ-12 — `questions.yaml` vit dans le dossier de projet, sur le volume, et
 # non dans le dépôt : c'est le seul moyen de corriger un libellé le 4 septembre
 # au soir sans redéployer. Une seule lecture, là où il y en avait deux.
-CONFIG = _substituer(
-    yaml.safe_load(config.projet().chemin_questions.read_text(encoding="utf-8"))
-)
+# Deux points de capture, parce qu'une ErreurConfiguration peut sortir ici, à
+# l'import — pointeur absent, dossier inexistant, questions.yaml manquant — ou
+# plus tard au cycle de vie. Dans les deux cas on écrit la consigne en clair
+# avant de laisser l'exception partir : le processus doit bien mourir, mais
+# l'opérateur doit pouvoir lire pourquoi sans dérouler une trace.
+try:
+    CONFIG = _substituer(
+        yaml.safe_load(config.projet().chemin_questions.read_text(encoding="utf-8"))
+    )
+except config.ErreurConfiguration as _exc:
+    print(config.bloc_erreur(_exc), flush=True)
+    raise
 
 MOTIFS_REPRISE = {m["cle"] for m in CONFIG.get("motifs_reprise", [])}
 
+# Posé quand la configuration est refusée au cycle de vie. Le service démarre
+# alors mais ne sert RIEN : ni migration, ni worker, ni instantané, ni route du
+# parcours. Mourir en boucle rendrait le volume inatteignable, donc le fichier
+# fautif incorrigible — c'est le blocage circulaire du 25 août.
+PANNE: Exception | None = None
+
+
 @asynccontextmanager
 async def cycle_de_vie(_: FastAPI):
+    global PANNE
     # Une ligne par démarrage, dont l'empreinte de questions.yaml : c'est la
     # seule chose qui aurait révélé la configuration périmée du 17 août.
     print(config.resume_demarrage(), flush=True)
     # EX-AUTH-18 — sans mot de passe, la soirée est ouverte à tous ou fermée à
     # tous. Le refus est ici et non à la première requête : découvrir à 21 h
     # que le `config.yaml` déposé n'en portait pas serait le pire moment.
-    acces.verifier_au_demarrage()
+    try:
+        acces.verifier_au_demarrage()
+    except config.ErreurConfiguration as exc:
+        PANNE = exc
+        print(config.bloc_erreur(exc), flush=True)
+        # Aucune migration : appliquer un schéma à une base dont on ne sait
+        # plus si elle est au bon endroit serait pire que l'arrêt.
+        yield
+        return
+    PANNE = None
     print(acces.resume(), flush=True)
     bd.initialiser()
     fils = taches.demarrer()
@@ -127,6 +154,11 @@ def _hors_porte(chemin: str) -> bool:
 @app.middleware("http")
 async def porte_et_entetes(request: Request, appel_suivant):
     chemin = request.url.path
+    # Avant la porte : en panne de configuration, il n'y a rien derrière la
+    # porte à protéger, et un écran de mot de passe qui n'ouvre sur rien
+    # ferait croire à un mot de passe erroné.
+    if PANNE is not None:
+        return HTMLResponse(panne.page(str(PANNE)), status_code=panne.CODE)
     if not _hors_porte(chemin) and not acces.cookie_valide(
             request.cookies.get(acces.NOM_COOKIE)):
         # `vers` conserve la destination : celui qui ouvre le lien de son

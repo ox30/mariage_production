@@ -52,6 +52,84 @@ assert len(plan.avertissements) >= 4, plan.avertissements
 assert all("exemple" in a for a in plan.avertissements)
 print("TOUT PASSE — le gabarit livré se lit et signale ses lignes d'exemple")
 
+# --- Un vrai invité homonyme d'une ligne d'exemple n'est pas accusé --------
+# Constaté sur la vraie liste du 25 août : elle contenait un « Jean-Pierre
+# Gagnebin », mes noms d'exemple venant des tests du projet. Le rapport
+# accusait un vrai invité d'être fictif. Un garde-fou qui crie au loup sur un
+# vrai invité use la confiance qu'on lui porte.
+homonyme = classeur([
+    ["", "2", "Jean-Pierre", "Gagnebin", "H", "non", "non"],
+    ["", "2", "Dolorès", "Gagnebin", "F", "non", "non"],
+], "homonyme_exemple.xlsx")
+plan = import_invites.preparer(homonyme)
+assert plan.recevable, plan.erreurs
+assert not plan.avertissements, \
+    f"un vrai invité est accusé d'être une ligne d'exemple : {plan.avertissements}"
+
+# Mais la ligne d'exemple NON MODIFIÉE reste détectée : la table, le genre et
+# le rôle la distinguent du vrai invité.
+copie = classeur([["", "1", "jean-pierre", "gagnebin", "H", "oui", ""]],
+                 "exemple_intact.xlsx")
+assert import_invites.preparer(copie).avertissements, \
+    "une ligne d'exemple laissée telle quelle doit être signalée"
+print("TOUT PASSE — l'exemple se reconnaît à la ligne entière, pas au seul nom")
+
+# --- Le nom de famille est facultatif ------------------------------------
+# 48 invités sur 93 n'en avaient pas sur la vraie liste : le conjoint d'un
+# cousin, l'ami dont on n'a jamais su le nom. Les exiger rejetait la moitié du
+# fichier et forçait à inventer.
+partiels = classeur([
+    ["", "1", "Coralie", "", "F", "non", "non"],
+    ["", "1", "Anne-Marie", "", "F", "non", "non"],
+    ["", "2", "Sylvain", "Schär", "H", "non", "non"],
+], "sans_nom.xlsx")
+plan = import_invites.preparer(partiels)
+assert plan.recevable, plan.erreurs
+assert plan.lignes_lues == 3
+assert any("sans nom de famille" in a for a in plan.avertissements), \
+    "le rapport doit dire combien de personnes restent à compléter"
+import_invites.appliquer(partiels)
+coralie = par_nom("Coralie", "")[0]
+assert coralie.nom == "", repr(coralie.nom)
+# EX-AUTH-22 — le palier d'indice tient avec un nom vide, sans réécriture.
+import noms as _noms
+assert _noms.initiales("Coralie", "") == "C."
+assert _noms.initiales("Anne-Marie", "") == "A.-M."
+
+# Le prénom, lui, reste obligatoire : sans lui il ne reste rien à quoi
+# rattacher une chronique.
+plan = import_invites.preparer(classeur(
+    [["", "1", "", "Sanslenom", "F", "non", "non"]], "sans_prenom.xlsx"))
+assert not plan.recevable and "prénom" in " ".join(plan.erreurs), plan.erreurs
+
+# Et deux personnes du même prénom sans nom déclenchent le conflit ordinaire :
+# rien n'est relâché, c'est seulement la règle qui devient juste.
+plan = import_invites.preparer(classeur([
+    ["", "1", "Sophie", "", "F", "non", "non"],
+    ["", "4", "sophie", "", "F", "non", "non"],
+], "deux_sophie.xlsx"))
+assert not plan.recevable and len(plan.conflits) == 1, plan.conflits
+print("TOUT PASSE — le nom de famille est facultatif, le prénom ne l'est pas")
+
+# --- Les erreurs se groupent par nature ---------------------------------
+# Le rapport du 25 août alignait quarante-huit fois le même message : ça ne se
+# lit pas, et ça cache les autres erreurs sous la répétition.
+# Quinze et non douze : à douze on atteint exactement le maximum de
+# l'énumération, donc rien n'est tronqué et l'assertion sur la troncature ne
+# peut pas échouer. Même faute que le message d'erreur trop court du matin.
+melange = classeur([["", "1", f"Nom{i}", "X", "Madame", "non", "non"]
+                    for i in range(15)] +
+                   [["", "1", "Autre", "Y", "F", "peut-être", "non"]],
+                   "melange.xlsx")
+plan = import_invites.preparer(melange)
+assert not plan.recevable
+assert len(plan.erreurs) == 2, \
+    f"deux natures d'erreur devraient donner deux lignes : {plan.erreurs}"
+groupe = [e for e in plan.erreurs if "Madame" in e][0]
+assert groupe.startswith("15 lignes"), groupe
+assert "autre(s)" in groupe, "l'énumération doit être tronquée, pas interminable"
+print("TOUT PASSE — les erreurs se groupent par nature, pas ligne à ligne")
+
 # --- L'en-tête est cherché, pas supposé en ligne 1 -------------------------
 # Le gabarit porte un titre et deux lignes d'explication au-dessus ; un fichier
 # repassé par un tableur peut en gagner d'autres.

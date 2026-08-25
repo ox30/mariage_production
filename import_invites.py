@@ -34,12 +34,25 @@ from modeles import Chronique, Personne, TableGroupe
 COLONNES = ["Identifiant", "Table", "Prénom", "Nom", "Genre",
             "Responsable", "Marié"]
 
-# Une ligne d'exemple du gabarit oubliée dans le fichier rempli produirait une
-# « Marie Meyer » fictive au milieu des vrais invités. Elles portent des
-# identifiants reconnaissables ; le reste se repère au couple exact.
+# Une ligne d'exemple du gabarit oubliée dans le fichier rempli produirait un
+# invité fictif au milieu des vrais.
+#
+# La détection porte sur la ligne ENTIÈRE, et non sur le seul couple
+# (prénom, nom). Premier jet le 25 août : la vraie liste contenait un
+# « Jean-Pierre Gagnebin » — mes noms d'exemple venaient des tests du projet,
+# donc de vrais invités — et le rapport accusait quelqu'un d'être fictif. Un
+# garde-fou qui crie au loup sur un vrai invité use la confiance qu'on lui
+# porte, et c'est le jour où il aura raison qu'on ne le lira plus.
+#
+# Comparer table, genre et rôle en plus du nom rend la coïncidence
+# invraisemblable : l'exemple est à la table 1 et responsable ; le vrai
+# Jean-Pierre est à la table 2 et ne l'est pas.
 EXEMPLES_DU_GABARIT = {
-    ("jean-pierre", "gagnebin"), ("marie-jose", "de rham"),
-    ("marie", "meyer"), ("olivier", "d'alembert"),
+    ("1", "jean-pierre", "gagnebin", "h", "oui", ""),
+    ("1", "marie-jose", "de rham", "f", "", ""),
+    ("2", "marie", "meyer", "f", "", ""),
+    ("5", "marie", "meyer", "f", "", ""),
+    ("", "olivier", "d'alembert", "", "", ""),
 }
 
 VRAI = {"oui", "o", "yes", "y", "1", "true", "vrai", "x"}
@@ -90,6 +103,20 @@ class ValeurRefusee(ValueError):
     pass
 
 
+def _lister(valeurs, maximum: int = 12) -> str:
+    """Une énumération lisible, tronquée plutôt qu'interminable."""
+    valeurs = list(valeurs)
+    debut = ", ".join(str(v) for v in valeurs[:maximum])
+    reste = len(valeurs) - maximum
+    return f"{debut} et {reste} autre(s)" if reste > 0 else debut
+
+
+def _grouper(motif: str, numeros: list[int]) -> str:
+    if len(numeros) == 1:
+        return f"ligne {numeros[0]} : {motif}"
+    return f"{len(numeros)} lignes — {motif} : {_lister(numeros)}"
+
+
 @dataclass
 class Ligne:
     numero: int
@@ -100,6 +127,15 @@ class Ligne:
     genre: str | None
     est_responsable: bool
     est_marie: bool
+
+    @property
+    def empreinte_exemple(self) -> tuple[str, ...]:
+        """La ligne entière, pour reconnaître un exemple NON MODIFIÉ."""
+        return (normaliser(self.table), normaliser(self.prenom),
+                normaliser(self.nom),
+                {"masculin": "h", "feminin": "f"}.get(self.genre, ""),
+                "oui" if self.est_responsable else "",
+                "oui" if self.est_marie else "")
 
     @property
     def cle(self) -> tuple[str, ...]:
@@ -145,6 +181,7 @@ def lire_classeur(chemin) -> tuple[list[Ligne], list[str]]:
     feuille = classeur[classeur.sheetnames[0]]
 
     lignes, erreurs = [], []
+    groupes: dict[str, list[int]] = {}
     entete_vue, index = None, {}
     for numero, brut in enumerate(feuille.iter_rows(values_only=True), start=1):
         valeurs = ["" if v is None else str(v).strip() for v in brut]
@@ -168,8 +205,16 @@ def lire_classeur(chemin) -> tuple[list[Ligne], list[str]]:
         if not champ("Prénom").strip() and not champ("Nom").strip():
             continue
         try:
-            if not champ("Prénom").strip() or not champ("Nom").strip():
-                raise ValeurRefusee("prénom ou nom manquant")
+            # Le NOM DE FAMILLE est facultatif, le prénom ne l'est pas.
+            #
+            # Sur la vraie liste du 25 août, 48 invités sur 93 n'en avaient pas
+            # : le conjoint d'un cousin, l'ami d'enfance dont on n'a jamais su
+            # le nom. Les exiger tous rejetait la moitié du fichier et forçait
+            # à inventer. Le rapprochement reste sûr — la clé devient
+            # (prénom, ""), et deux « Sophie » sans nom déclenchent le conflit
+            # d'EX-ADM-15 comme deux homonymes ordinaires.
+            if not champ("Prénom").strip():
+                raise ValeurRefusee("aucun prénom")
             lignes.append(Ligne(
                 numero=numero,
                 identifiant=champ("Identifiant").strip(),
@@ -181,9 +226,14 @@ def lire_classeur(chemin) -> tuple[list[Ligne], list[str]]:
                 est_marie=_booleen(champ("Marié")),
             ))
         except ValeurRefusee as exc:
-            erreurs.append(f"ligne {numero} : {exc}")
+            # Groupées par NATURE et non ligne à ligne : le rapport du 25 août
+            # alignait quarante-huit fois le même message, ce qui ne se lit
+            # pas et cache les autres erreurs sous la répétition.
+            groupes.setdefault(str(exc), []).append(numero)
 
     classeur.close()
+    for motif, numeros in groupes.items():
+        erreurs.append(_grouper(motif, numeros))
     if entete_vue is None:
         erreurs.insert(0, (
             "aucune ligne d'en-tête trouvée. Le fichier doit porter les sept "
@@ -212,8 +262,16 @@ def preparer(chemin, liste_complete: bool = False) -> Plan:
         else:
             vues[ligne.cle] = ligne.numero
 
+    sans_nom = [l for l in lignes if not l.nom.strip()]
+    if sans_nom:
+        plan.avertissements.append(
+            f"{len(sans_nom)} personne(s) sans nom de famille : "
+            f"{_lister(l.prenom for l in sans_nom)}. Elles seront importées, "
+            "mais leur palier d'indice ne montrera qu'une initiale, et deux "
+            "personnes du même prénom devront être distinguées.")
+
     for ligne in lignes:
-        if (normaliser(ligne.prenom), normaliser(ligne.nom)) in EXEMPLES_DU_GABARIT:
+        if ligne.empreinte_exemple in EXEMPLES_DU_GABARIT:
             plan.avertissements.append(
                 f"ligne {ligne.numero} : « {ligne.prenom} {ligne.nom} » est une "
                 "ligne d'exemple du gabarit. À supprimer si ce n'est pas un "

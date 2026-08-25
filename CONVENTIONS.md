@@ -332,8 +332,26 @@ qui a été importé et quand. Le nom de fichier venant d'un champ de formulaire
 est réduit à son dernier segment, sans quoi `../piege.xlsx` serait lu comme un
 classeur.
 
+**Le nom de famille est facultatif, le prénom ne l'est pas.** Sur la vraie
+liste, 48 invités sur 93 n'avaient pas de nom : le conjoint d'un cousin, l'ami
+dont on n'a jamais su le nom. Les exiger rejetait la moitié du fichier et
+forçait à inventer. La clé devient `(prénom, "")`, et deux « Sophie » sans nom
+déclenchent le conflit d'`EX-ADM-15` comme deux homonymes ordinaires — rien
+n'est relâché, c'est la règle qui devient juste. `noms.initiales` tenait déjà :
+« Coralie » donne `C.`, « Anne-Marie » donne `A.-M.`.
+
+**Les erreurs de lecture se groupent par nature.** Le premier rapport alignait
+quarante-huit fois « prénom ou nom manquant » : ça ne se lit pas, et ça cache
+les autres erreurs sous la répétition.
+
 **Les lignes d'exemple du gabarit sont signalées.** Oubliées dans un fichier
-rempli, elles fabriqueraient des invités fictifs au milieu des vrais.
+rempli, elles fabriqueraient des invités fictifs au milieu des vrais. La
+détection porte sur la **ligne entière** — table, genre et rôle compris — et
+non sur le seul couple (prénom, nom) : la vraie liste contenait un
+« Jean-Pierre Gagnebin », mes noms d'exemple venant des tests du projet, et le
+rapport accusait un vrai invité d'être fictif. Un garde-fou qui crie au loup
+use la confiance qu'on lui porte, et c'est le jour où il aura raison qu'on ne
+le lira plus.
 
 ## Interface
 

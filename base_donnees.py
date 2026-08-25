@@ -308,8 +308,13 @@ class Resolution:
 
 
 def resoudre(prenom: str, nom: str) -> Resolution:
-    """EX-AUTH-05 — qui répond à ce nom ? Sans rien créer ni choisir."""
-    if not prenom.strip() or not nom.strip():
+    """EX-AUTH-05 — qui répond à ce nom ? Sans rien créer ni choisir.
+
+    Le nom de famille peut être vide : sur la vraie liste, 48 invités sur 93
+    n'en avaient pas, et l'import les accepte désormais. Le prénom, lui, reste
+    exigé — sans lui il ne reste rien à quoi rattacher une chronique.
+    """
+    if not prenom.strip():
         return Resolution([])
     with Seance() as seance:
         candidates = personnes_par_nom(seance, prenom, nom)

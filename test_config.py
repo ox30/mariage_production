@@ -163,6 +163,34 @@ assert "AAAA-MM-JJ-identifiant" in sortie, "le nom non conforme doit être signa
 assert "avertissement" in sortie, "et rester un avertissement"
 (volume / "projet-actif.txt").write_text(f"{NOM}\n", encoding="utf-8")
 
+# --- Le nom du dossier fait autorité, jamais le champ déclaratif ----------
+# Défaut du 25 août, en production : `config.yaml` recopié depuis `exemples/`
+# portait `identifiant: 2026-08-repetition` alors que le dossier s'appelait
+# `2026-08-19-repetition`. Les sauvegardes sont parties sous un préfixe qui ne
+# correspondait à aucun dossier, et rien ne l'a signalé.
+(dossier / "config.yaml").write_text(
+    'projet:\n  identifiant: un-tout-autre-nom\n  nom: "Essai"\n'
+    '  type: production\n  langue: fr\n', encoding="utf-8")
+sortie = reussit(EXIGER_VOLUME=1, RACINE_DONNEES=volume)
+assert f"projet actif    : {NOM}" in sortie, \
+    "le dossier fait autorité, pas le champ déclaratif"
+assert "un-tout-autre-nom" in sortie and "Le dossier fait autorité" in sortie, \
+    "le désaccord doit être signalé, pas tu"
+assert "avertissement" in sortie, "signalé, mais sans empêcher de servir"
+
+# Sans champ déclaratif — la forme recommandée — aucun avertissement.
+(dossier / "config.yaml").write_text(
+    CONFIG_MINIMALE.format(identifiant=NOM, type="production"), encoding="utf-8")
+sortie = reussit(EXIGER_VOLUME=1, RACINE_DONNEES=volume)
+assert "Le dossier fait autorité" not in sortie, \
+    "un identifiant concordant ne doit rien signaler"
+
+# Et l'exemple livré ne porte plus d'identifiant : c'est lui qui a servi de
+# vecteur au défaut.
+exemple = (RACINE / "exemples" / "config.yaml").read_text(encoding="utf-8")
+assert "identifiant:" not in exemple, \
+    "exemples/config.yaml ne doit plus déclarer d'identifiant"
+
 print("TOUT PASSE — projet de production résolu et arborescence créée")
 
 # --------------------------------------------------------------------------- #

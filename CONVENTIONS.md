@@ -45,6 +45,14 @@ L'application ne connaît **qu'un seul chemin**, celui désigné par
 `projet-actif.txt` (`EX-PRJ-01`). Tout ce qui touche au système de fichiers
 passe par `config.py`. Aucun module ne construit un chemin à partir de `/data`.
 
+**Le nom du dossier fait autorité pour l'identité du projet**, jamais un champ
+déclaratif. Le 25 août, un `config.yaml` recopié depuis `exemples/` portait un
+autre identifiant : les sauvegardes sont parties sous un préfixe qui ne
+correspondait à aucun dossier, et rien ne l'a signalé pendant des heures. Deux
+endroits déclaraient la même chose sans obligation de s'accorder. Un
+`projet.identifiant` divergent est désormais annoncé au démarrage, et l'exemple
+livré n'en porte plus.
+
 ## Configuration
 
 | Ce qui vit où | Pourquoi |
@@ -146,6 +154,7 @@ qu'elles décrivent. Une valeur dérivée ne peut pas se désynchroniser :
 
 | Grandeur | Dérivée de | Exigence |
 |---|---|---|
+| l'identité d'un projet | le nom de son dossier | `EX-PRJ-01` |
 | les doublons de noms fictifs | les noms fictifs normalisés | `EX-IA-44` |
 | `nb_generations`, `nb_tentatives` | le journal | `EX-GEN-07`, `EX-IA-21` |
 | `chronique.etage` | les clés de réponses présentes | `EX-QUE-11` |

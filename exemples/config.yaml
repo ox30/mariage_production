@@ -1,17 +1,21 @@
 # Exemple de `config.yaml` — à déposer dans un dossier de projet sur le volume,
-# par exemple /data/projets/2026-08-repetition/config.yaml
+# par exemple /data/projets/2026-08-19-repetition/config.yaml
 #
 # Ce fichier n'est PAS lu depuis le dépôt. Il n'est là qu'à titre d'exemple, et
 # rien ne le recopie automatiquement : une copie faite une fois puis jamais
 # rafraîchie a déjà fait tourner l'application des heures sur une configuration
 # périmée, sans message d'erreur (EX-ARC-19).
 #
-# ÉTAT — seul le bloc `projet:` est lu à ce jour. Les autres blocs sont donnés
-# pour mémoire, conformément à la section 4.6 du cahier des charges ; ils seront
-# consommés à l'étape 2. En cas de divergence, c'est la section 4.6 qui fait foi.
+# ÉTAT — les blocs `projet:`, `worker:` et `sauvegarde:` sont lus. `acces:`,
+# `quotas:`, `ia:`, `tables:` et `table_test:` sont donnés pour mémoire,
+# conformément à la section 4.6 du cahier des charges ; ils seront consommés à
+# l'étape 2. En cas de divergence, c'est la section 4.6 qui fait foi.
 
 projet:
-  identifiant: 2026-08-repetition
+  # PAS d'`identifiant` ici : le NOM DU DOSSIER fait autorité. Ce champ a
+  # existé, et il a causé un vrai défaut le 25 août — recopié depuis cet
+  # exemple, il a envoyé les sauvegardes sous un préfixe qui ne correspondait
+  # à aucun dossier. S'il est présent et diverge, le démarrage le signale.
   nom: "Répétition générale"
   date: 2026-09-05
   # `preparation` ou `production`, IMMUABLE ensuite (EX-PRJ-04, EX-PRJ-05).

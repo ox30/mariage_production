@@ -130,6 +130,9 @@ class Projet:
     est_developpement: bool
     volume_monte: bool
     configuration: dict
+    # Ce que `config.yaml` prétend, quand il le prétend. Sert uniquement à
+    # signaler un désaccord avec le nom du dossier ; ne commande rien.
+    identifiant_declare: str | None = None
 
     @property
     def est_production(self) -> bool:
@@ -216,6 +219,18 @@ def _lire_pointeur(racine: pathlib.Path) -> str | None:
     return None
 
 
+def _avertissements_projet(p: "Projet") -> list[str]:
+    """Désaccords qui n'empêchent pas de servir, mais qu'il faut voir."""
+    avertissements = _avertissements_nom(p.identifiant)
+    if p.identifiant_declare and p.identifiant_declare != p.identifiant:
+        avertissements.append(
+            f"config.yaml déclare « {p.identifiant_declare} » alors que le "
+            f"dossier s'appelle « {p.identifiant} ». Le dossier fait autorité "
+            f"— les sauvegardes partent sous le préfixe « {p.identifiant} ». "
+            f"Corriger ou retirer le champ `projet.identifiant`.")
+    return avertissements
+
+
 def _avertissements_nom(identifiant: str) -> list[str]:
     """EX-PRJ-02 demande `AAAA-MM-JJ-identifiant`.
 
@@ -298,7 +313,14 @@ def _projet_du_volume(racine: pathlib.Path, identifiant: str) -> Projet:
         )
 
     return Projet(
-        identifiant=str(bloc.get("identifiant") or identifiant),
+        # Le NOM DU DOSSIER fait autorité, jamais le champ déclaratif.
+        # Défaut du 25 août : `config.yaml` recopié depuis `exemples/`
+        # portait un autre identifiant, et les sauvegardes sont parties sous un
+        # préfixe qui ne correspondait à aucun dossier. Deux endroits
+        # déclaraient l'identité d'un projet, rien ne les obligeait à
+        # s'accorder, et personne n'a rien vu. Le dossier dit où vivent
+        # réellement les données : c'est lui la vérité.
+        identifiant=identifiant,
         nom=str(bloc.get("nom") or identifiant),
         date=str(bloc["date"]) if bloc.get("date") else None,
         type=type_projet,
@@ -311,6 +333,8 @@ def _projet_du_volume(racine: pathlib.Path, identifiant: str) -> Projet:
         dossier_exports=dossier / "exports",
         dossier_logs=dossier / "logs",
         dossier_instantanes=dossier / "instantanes",
+        identifiant_declare=(str(bloc["identifiant"]).strip()
+                             if bloc.get("identifiant") else None),
         est_developpement=False,
         volume_monte=True,
         configuration=configuration,
@@ -343,6 +367,7 @@ def _projet_de_developpement(racine: pathlib.Path) -> Projet:
         dossier_instantanes=dossier / "instantanes",
         est_developpement=True,
         volume_monte=racine != RACINE_DEVELOPPEMENT,
+        identifiant_declare=None,
         configuration={},
     )
 
@@ -481,7 +506,7 @@ def resume_demarrage() -> str:
             "questions.yaml est lu dans le dépôt au lieu du volume. Déposer "
             f"{POINTEUR} puis poser EXIGER_VOLUME=1 (EX-PRJ-01, EX-PRJ-12)."
         )
-    for avertissement in (_avertissements_nom(p.identifiant)
+    for avertissement in (_avertissements_projet(p)
                           if not p.est_developpement else []):
         lignes.append(f"avertissement   : {avertissement}")
     return "\n".join(lignes)

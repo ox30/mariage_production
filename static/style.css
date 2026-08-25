@@ -418,3 +418,22 @@ fieldset p:last-child { margin-bottom: 0; }
 /* Un nom masqué par le filtre ne doit pas laisser d'espace derrière lui. */
 .choix[hidden], .groupe-table[hidden] { display: none; }
 .groupe-table .surtitre { margin: 1.4rem 0 0.5rem; }
+
+/* « Autre chose… » — le seul bouton du questionnaire qui n'enchaîne pas.
+   Identique aux autres, il serait vécu comme un bouton en panne : on le touche,
+   rien ne se passe. Le trait pointillé dit qu'il ouvre au lieu de conclure. */
+.choix.ouvre-libre {
+  background: transparent;
+  border: 1px dashed var(--ardoise-clair);
+  color: var(--brume-faible);
+  font-size: 0.95rem;
+}
+.choix.ouvre-libre.retenu {
+  border-style: solid;
+  border-color: var(--laiton);
+  color: var(--brume);
+}
+.zone-libre { margin: 0.2rem 0 0.6rem; }
+.zone-libre .exemple { margin: 0 0 0.4rem; }
+.zone-libre input[type="text"] { width: 100%; }
+.zone-libre .action { margin-top: 0.8rem; }

@@ -122,6 +122,17 @@ async def cycle_de_vie(_: FastAPI):
     # EX-ADM-22 — questions.yaml porte les valeurs par défaut, la base fait
     # autorité ensuite. Le semis n'écrase JAMAIS un libellé déjà modifié :
     # sans cela, chaque redémarrage effacerait le travail de la soirée.
+    # EX-PRJ-10 — la table de test reste ACTIVE en production : le test de
+    # fumée du jour J se fait sur la vraie base, avec la vraie clé et le vrai
+    # modèle. Une répétition ailleurs n'éprouverait pas ce qui va servir.
+    testeurs = bd.semer_table_test(
+        actif=bool(config.parametre("table_test.active", True)),
+        combien=int(config.parametre("table_test.utilisateurs",
+                                     bd.NB_UTILISATEURS_TEST)))
+    if testeurs:
+        print(f"table de test   : {testeurs} compte(s) test_01… créé(s) "
+              "— invisibles dans les listes et les totaux (EX-TST-04)",
+              flush=True)
     semees = bd.semer_regions(CONFIG["lieux"])
     print(f"régions         : {len(bd.regions())} en base"
           + (f", dont {semees} semée(s) depuis questions.yaml" if semees
@@ -888,6 +899,7 @@ def _contexte_invites(request: Request, **extra) -> dict:
             select(modeles.Personne).where(modeles.Personne.active.is_(True))))
     base = {
         "request": request,
+        "mode_test": bd.mode_test_actif(),
         "total_actifs": len(actifs),
         "total_import": sum(1 for p in actifs if p.source == "import"),
         "total_libre": sum(1 for p in actifs if p.source != "import"),
@@ -955,7 +967,8 @@ async def admin_invites_appliquer(request: Request, _: str = Depends(admin)):
 def admin_tables(request: Request, _: str = Depends(admin)):
     return gabarits.TemplateResponse(
         "admin_tables.html",
-        {"request": request, "tables": bd.tables(), "enregistre": 0})
+        {"request": request, "tables": bd.tables(avec_test=True), "enregistre": 0,
+         "mode_test": bd.mode_test_actif()})
 
 
 @app.post("/admin/tables", response_class=HTMLResponse)
@@ -966,14 +979,16 @@ async def admin_tables_enregistrer(request: Request, _: str = Depends(admin)):
         if cle.startswith("nom_") and bd.renommer_table(cle[4:], valeur))
     return gabarits.TemplateResponse(
         "admin_tables.html",
-        {"request": request, "tables": bd.tables(), "enregistre": enregistre})
+        {"request": request, "tables": bd.tables(avec_test=True), "enregistre": enregistre,
+         "mode_test": bd.mode_test_actif()})
 
 
 @app.get("/admin/regions", response_class=HTMLResponse)
 def admin_regions(request: Request, _: str = Depends(admin)):
     return gabarits.TemplateResponse(
         "admin_regions.html",
-        {"request": request, "regions": _regions_ordonnees(), "enregistre": 0})
+        {"request": request, "regions": _regions_ordonnees(), "enregistre": 0,
+         "mode_test": bd.mode_test_actif()})
 
 
 def _regions_ordonnees() -> list[dict]:
@@ -996,7 +1011,7 @@ async def admin_regions_enregistrer(request: Request, _: str = Depends(admin)):
     return gabarits.TemplateResponse(
         "admin_regions.html",
         {"request": request, "regions": _regions_ordonnees(),
-         "enregistre": enregistre})
+         "enregistre": enregistre, "mode_test": bd.mode_test_actif()})
 
 
 # Pages d'administration provisoires — reprises du banc d'essai.

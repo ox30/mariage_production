@@ -624,15 +624,23 @@ def modifier_region(code: str, libelle: str, locution: str, ombre: str) -> bool:
 # Les tables (EX-ADM-22, clin d'œil aux noms choisis par les mariés)
 # --------------------------------------------------------------------------- #
 
-def tables() -> list[dict]:
+def tables(avec_test: bool = False) -> list[dict]:
     """Les tables avec leur effectif, dans l'ordre de leur code.
 
     L'effectif se **compte**, il ne se stocke pas : une colonne de comptage se
     désynchronise dès le premier import (EX-GEN-07).
+
+    EX-TST-04 — la table de test est exclue **par défaut**, comme `lister()` :
+    sans quoi elle s'offrirait à l'invité qui choisit sa table en saisie libre,
+    et il s'y placerait sans savoir ce qu'elle est. L'administration la demande
+    explicitement.
     """
     with Seance() as seance:
         lues = []
-        for table in seance.scalars(select(TableGroupe)):
+        requete = select(TableGroupe)
+        if not avec_test:
+            requete = requete.where(TableGroupe.est_test.is_(False))
+        for table in seance.scalars(requete):
             effectif = seance.scalar(
                 select(func.count()).select_from(Personne)
                 .where(Personne.table_uuid == table.uuid,
@@ -656,6 +664,71 @@ def renommer_table(uuid: str, nom: str) -> bool:
                     objet_type="table", details={"code": table.code, "nom": nom})
         seance.commit()
     return True
+
+
+# --------------------------------------------------------------------------- #
+# La table de test (EX-TST-01 à EX-TST-08, EX-PRJ-10)
+# --------------------------------------------------------------------------- #
+
+CODE_TABLE_TEST = "test"
+NB_UTILISATEURS_TEST = 10
+
+
+def semer_table_test(actif: bool = True, combien: int = NB_UTILISATEURS_TEST) -> int:
+    """`test_01` à `test_10`, **actifs jusqu'en production** (EX-PRJ-10).
+
+    Le test de fumée du jour J se fait sur la vraie base, avec la vraie clé
+    d'API et le vrai modèle : une répétition sur un autre projet n'éprouverait
+    pas ce qui va servir. D'où des comptes de test qui survivent à la bascule,
+    et l'étanchéité qui va avec — `est_test` hérité par tout ce qu'ils créent,
+    et exclu de chaque liste et de chaque total (EX-TST-02 à EX-TST-08).
+
+    Idempotent : relancé, il ne double rien.
+    """
+    if not actif:
+        return 0
+    cree = 0
+    with Seance() as seance:
+        table = seance.scalar(select(TableGroupe)
+                              .where(TableGroupe.code == CODE_TABLE_TEST))
+        if table is None:
+            table = TableGroupe(code=CODE_TABLE_TEST, nom="Table de test",
+                                ordre=9999, est_test=True)
+            seance.add(table)
+            seance.flush()
+        table.est_test = True
+        for rang in range(1, combien + 1):
+            identifiant = f"test_{rang:02d}"
+            existante = seance.scalar(select(Personne).where(
+                Personne.identifiant_import == identifiant))
+            if existante is not None:
+                # Le drapeau est réaffirmé : une personne de test qui perdrait
+                # `est_test` apparaîtrait dans les listes et dans les totaux,
+                # et c'est le genre de chose qu'on ne remarque qu'après coup.
+                existante.est_test = True
+                existante.table_uuid = table.uuid
+                existante.active = True
+                continue
+            seance.add(Personne(prenom="Test", nom=f"{rang:02d}",
+                                identifiant_import=identifiant,
+                                table_uuid=table.uuid, est_test=True,
+                                source="import", active=True))
+            cree += 1
+        seance.commit()
+    return cree
+
+
+def mode_test_actif() -> bool:
+    """Vrai dès qu'une chronique de test existe — EX-TST-07, le bandeau.
+
+    **Dérivé, jamais déclaré.** Un interrupteur dirait ce qu'on a réglé ; ceci
+    dit ce qui est réellement en base. C'est la cinquième grandeur du projet à
+    suivre cette règle.
+    """
+    with Seance() as seance:
+        return seance.scalar(
+            select(Chronique.uuid).where(Chronique.est_test.is_(True),
+                                         Chronique.supprimee.is_(False))) is not None
 
 
 def definir_genre(personne_uuid: str, genre: str) -> None:
@@ -747,11 +820,20 @@ def lire(identifiant: str) -> Chronique | None:
         return _garnir(seance, chronique)
 
 
-def lister(seulement_validees: bool = False) -> list[Chronique]:
+def lister(seulement_validees: bool = False,
+           avec_test: bool = False) -> list[Chronique]:
+    """EX-TST-04, EX-TST-05 — la table de test est invisible par DÉFAUT.
+
+    L'inverse — visible sauf mention contraire — ferait apparaître dix
+    personnages fictifs sur la carte des mariés le jour où l'on oublierait le
+    drapeau quelque part. Le défaut sûr est celui qui protège quand on oublie.
+    """
     with Seance() as seance:
         requete = (select(Chronique, Personne)
                    .join(Personne, Personne.uuid == Chronique.personne_uuid)
                    .where(Chronique.supprimee.is_(False)))
+        if not avec_test:
+            requete = requete.where(Chronique.est_test.is_(False))
         if seulement_validees:
             requete = requete.where(Chronique.validee.is_(True),
                                     Chronique.portrait.is_not(None))

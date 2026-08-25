@@ -398,6 +398,52 @@ n'a pas à crier plus fort que la phrase qui le porte.
 qui vit en mémoire est un onglet perdu dès que l'écran du téléphone se
 verrouille.
 
+## Les questions fermées, et le champ libre
+
+`EX-QUE-17` — **deux remèdes pour deux problèmes distincts.** À six options et
+cent invités, dix-sept personnes partagent le même défaut : plus d'options agit
+sur **tout le monde**, le champ libre agit sur celui à qui rien ne convient.
+Les deux se cumulent ; ce ne sont pas deux façons de faire la même chose.
+
+| Question | Options | Champ libre | Pourquoi |
+|---|---|---|---|
+| `defaut`, `colere` | 8 | oui | traits de caractère, transposés librement |
+| `role_groupe` | 7 | oui | idem — elle n'en avait que 5 |
+| `lien` | 5 | oui | « Autrement » était un cul-de-sac : celui qui la choisissait livrait **zéro** indice. Pas d'option de plus : c'est un palier d'indice, il doit rester précis |
+| `attachement` | 6 | **non** | détermine le peuple, croisé avec l'allégeance (`EX-IA-09`). Une réponse libre laisserait le modèle choisir seul et la répartition sur les dix-huit peuples cesserait d'être maîtrisée |
+| `allegeance`, `monstre`, `destin` | 2 | **non** | binaires et structurantes |
+
+**Le bouton reste le chemin par défaut.** À 22 h, un verre à la main, taper
+coûte dix fois plus que toucher : « Autre » se place en dernier, discret, et
+c'est le **seul bouton du questionnaire qui n'enchaîne pas** — il déplie un
+champ. D'où son aspect distinct : identique aux autres, il serait vécu comme un
+bouton en panne.
+
+**Le texte libre part sous la clé de la question**, pas sous une clé à part :
+`ia.py` ne change pas, `reponses_json` reste homogène, et aucune clé n'est
+renommée — le banc d'essai figé reste relisible. `EX-SEC-16` traite déjà les
+réponses comme des données non fiables.
+
+## La table de test
+
+`EX-PRJ-10` — elle reste **active en production**. Le test de fumée du jour J
+se fait sur la vraie base, avec la vraie clé et le vrai modèle : une répétition
+ailleurs n'éprouverait pas ce qui va servir.
+
+D'où l'étanchéité qui va avec. `est_test` est **hérité** par tout ce qu'un
+testeur crée, et `lister()` comme `tables()` l'excluent **par défaut** —
+l'inverse ferait apparaître dix personnages fictifs sur la carte le jour où
+l'on oublierait le drapeau quelque part. Le défaut sûr est celui qui protège
+quand on oublie.
+
+Le semis **réaffirme** le drapeau à chaque démarrage : une personne de test qui
+l'aurait perdu reparaîtrait dans les listes, et c'est le genre de chose qu'on
+ne remarque qu'après coup.
+
+Le bandeau `MODE TEST` se **dérive** d'une chronique réellement en base — cinquième
+grandeur du projet à suivre cette règle. Un interrupteur dirait ce qu'on a
+réglé ; ceci dit ce qui est.
+
 ## L'import des invités
 
 **Rien ne s'écrit sans simulation préalable** (`EX-ADM-16`). `preparer()` calcule

@@ -75,7 +75,11 @@ print("TOUT PASSE — libellé et locution suivent sans redémarrage")
 
 # --- Le code d'une table ne bouge jamais, son nom oui --------------------
 tables = bd.tables()
+# La table de test n'y est pas : elle s'offrirait sinon à l'invité qui choisit
+# sa table en saisie libre, et il s'y placerait sans savoir ce qu'elle est.
 assert [t["code"] for t in tables] == ["3", "7"], tables
+assert any(t["code"] == "test" for t in bd.tables(avec_test=True)), \
+    "l'administration doit la voir, elle"
 assert all(t["code"] == t["nom"] for t in tables), "au départ, nom = code"
 assert {t["code"]: t["effectif"] for t in tables} == {"3": 2, "7": 1}
 
@@ -162,3 +166,50 @@ print("TOUT PASSE — les écrans écrivent, et n'effacent pas sur un champ vide
 
 import shutil
 shutil.rmtree(ATELIER, ignore_errors=True)
+
+# --- La table de test : présente, invisible, étanche (EX-TST-01 à 08) -----
+# EX-PRJ-10 — elle reste ACTIVE en production : le test de fumée du jour J se
+# fait sur la vraie base, avec la vraie clé et le vrai modèle. Une répétition
+# ailleurs n'éprouverait pas ce qui va servir.
+testeurs = [bd.resoudre("Test", f"{n:02d}").unique for n in range(1, 11)]
+assert all(t is not None for t in testeurs), "test_01…test_10 doivent exister"
+assert all(t.est_test for t in testeurs)
+assert {t.identifiant_import for t in testeurs} == {f"test_{n:02d}" for n in range(1, 11)}
+
+# Idempotent : relancé, il ne double rien — et il RÉAFFIRME le drapeau, qu'une
+# personne de test ayant perdu `est_test` apparaîtrait dans les listes.
+with bd.Seance() as seance:
+    seance.get(modeles.Personne, testeurs[0].uuid).est_test = False
+    seance.commit()
+assert bd.semer_table_test() == 0, "le semis a doublé les comptes de test"
+assert bd.resoudre("Test", "01").unique.est_test, "le drapeau n'a pas été réaffirmé"
+
+# EX-TST-04 — invisibles dans la liste où les invités se cherchent.
+_annuaire = [p for g in bd.annuaire() for p in g["gens"]]
+assert not [p for p in _annuaire if p["prenom"] == "Test"], \
+    "les comptes de test s'affichent dans la liste des invités"
+# Mais joignables par leur nom : sans cela, personne ne pourrait s'en servir.
+assert bd.resoudre("Test", "03").unique is not None
+
+# EX-TST-02 — le drapeau est hérité par ce que le testeur crée.
+uid_test = bd.creer(testeurs[2].uuid, {"metier": "essai"}, main.CODES_LIEUX)
+assert bd.lire(uid_test).est_test is True, "la chronique n'a pas hérité du drapeau"
+
+# EX-TST-05 — exclues des listes et des totaux, PAR DÉFAUT. L'inverse ferait
+# apparaître dix personnages fictifs sur la carte le jour où l'on oublierait
+# le drapeau quelque part.
+assert all(c.uuid != uid_test for c in bd.lister()), "une chronique de test est listée"
+assert any(c.uuid == uid_test for c in bd.lister(avec_test=True))
+
+# EX-TST-07 — le bandeau se DÉRIVE d'une chronique réellement présente, il ne
+# suit pas un interrupteur. Cinquième grandeur du projet à suivre cette règle.
+assert bd.mode_test_actif() is True
+for chemin in ("/admin/invites", "/admin/tables", "/admin/regions"):
+    assert "MODE TEST" in c.get(chemin, headers=AUTH).text, chemin
+with bd.Seance() as seance:
+    seance.get(modeles.Chronique, uid_test).supprimee = True
+    seance.commit()
+assert bd.mode_test_actif() is False, \
+    "le bandeau reste allumé alors qu'aucune chronique de test ne subsiste"
+assert "MODE TEST" not in c.get("/admin/invites", headers=AUTH).text
+print("TOUT PASSE — la table de test est présente, invisible et étanche")

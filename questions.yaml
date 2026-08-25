@@ -122,6 +122,14 @@ obligatoires:
       - Têtu comme une mule
       - Je veux tout contrôler
       - Je remets tout à demain
+      # +2 le 25 août (EX-QUE-17) : à six options et cent invités,
+      # dix-sept personnes partagent le même défaut.
+      - Je m'inquiète pour tout
+      - Je dis ce que je pense, trop vite
+    autre:
+      libelle: Autre chose…
+      exemple: en quelques mots, à la première personne
+      limite: 60
 
   - cle: objet
     role: ancre forte (artefact)
@@ -199,7 +207,15 @@ bonus:
       - Ami d'enfance
       - Collègue
       - Voisinage
-      - Autrement
+    # « Autrement » a été RETIRÉE des options au profit du champ libre : elle
+    # était un cul-de-sac. `lien` est le premier palier d'indice, et celui qui
+    # la choisissait livrait exactement zéro information aux mariés. Pas de
+    # nouvelle option ici — la question n'est pas un trait de caractère, elle
+    # doit rester précise.
+    autre:
+      libelle: Autrement…
+      exemple: en quelques mots
+      limite: 60
 
   - cle: role_groupe
     role: fonction dans le chapitre
@@ -211,6 +227,12 @@ bonus:
       - Réconforte
       - Calme le jeu
       - Observe en silence
+      - Raconte les histoires
+      - Rend service sans qu'on demande
+    autre:
+      libelle: Autre chose…
+      exemple: en quelques mots, à la première personne
+      limite: 60
 
   - cle: colere
     role: conflit du chapitre
@@ -223,6 +245,12 @@ bonus:
       - Qu'on me presse
       - Le bruit et la foule
       - Qu'on touche à mes proches
+      - Qu'on me prenne de haut
+      - La lâcheté
+    autre:
+      libelle: Autre chose…
+      exemple: en quelques mots, à la première personne
+      limite: 60
 
   - cle: talent
     role: ancre forte

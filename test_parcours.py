@@ -666,3 +666,113 @@ assert r.status_code == 303, "reprendre sans pouvoir régénérer n'a pas de sen
 r = c.get(f"/portrait/{uid_q}")
 assert "reprendre" not in r.text and "épuisé vos réécritures" in r.text
 print("TOUT PASSE — reprise des réponses, étage monotone, quota respecté")
+
+
+# --- Les options « Autre », et sur quelles questions (EX-QUE-17) -----------
+# Constat après la répétition : à six options et cent invités, dix-sept
+# personnes partagent le même défaut. Deux remèdes pour deux problèmes
+# distincts — plus d'options agit sur TOUT LE MONDE, le champ libre agit sur
+# celui à qui rien ne convient.
+_par_cle = {q["cle"]: q for bloc in ("obligatoires", "bonus")
+            for q in main.CONFIG[bloc]}
+
+for _cle, _options in (("defaut", 8), ("colere", 8), ("role_groupe", 7)):
+    assert len(_par_cle[_cle]["options"]) == _options, \
+        (_cle, len(_par_cle[_cle]["options"]))
+    assert _par_cle[_cle].get("autre"), f"{_cle} doit offrir un champ libre"
+
+# `lien` reçoit le champ SANS option de plus : ce n'est pas un trait de
+# caractère, c'est le premier palier d'indice, et il doit rester précis.
+# « Autrement » a été retirée — celui qui la choisissait livrait zéro
+# information aux mariés.
+assert _par_cle["lien"].get("autre"), "« Autrement » sans champ est un cul-de-sac"
+assert "Autrement" not in _par_cle["lien"]["options"], _par_cle["lien"]["options"]
+
+# Les questions STRUCTURANTES n'en ont pas. `attachement` détermine le peuple,
+# croisé avec l'allégeance (EX-IA-09) : une réponse libre laisserait le modèle
+# choisir seul, et la répartition sur les dix-huit peuples cesserait d'être
+# maîtrisée. Les trois autres sont binaires.
+for _cle in ("attachement", "allegeance", "monstre", "destin"):
+    assert not _par_cle[_cle].get("autre"), \
+        f"{_cle} est structurante : un champ libre y casserait la répartition"
+assert len(_par_cle["attachement"]["options"]) == 6
+
+# Aucune clé n'a été renommée : le banc d'essai figé doit rester relisible.
+assert set(_par_cle) >= {"metier", "attachement", "defaut", "objet", "allegeance",
+                         "monstre", "destin", "souvenir", "souhait", "lien",
+                         "role_groupe", "colere", "talent", "phrase"}
+print("TOUT PASSE — options et champs libres sur les seules questions ouvertes")
+
+# --- Le texte libre voyage sous la MÊME clé qu'une option -----------------
+# C'est ce qui fait qu'`ia.py` n'a rien à changer et que `reponses_json` reste
+# homogène. EX-SEC-16 traite déjà les réponses comme des données non fiables.
+c_libre = test_outils.client(main.app)
+r = test_outils.entrer_identite(c_libre, "Champ", "Libre")
+assert r.text.count("ouvre-libre") >= 1, "le bouton « Autre » manque à l'écran"
+assert 'aria-expanded="false"' in r.text, "le champ doit être replié au départ"
+# Et replié POUR DE VRAI : `aria-expanded` ne cache rien, c'est `hidden` qui le
+# fait. Un champ de saisie ouvert d'emblée ferait du clavier le chemin par
+# défaut, alors que le bouton doit le rester (EX-QUE-17).
+assert 'class="zone-libre" data-cle="defaut" hidden' in r.text, \
+    "la zone de saisie doit être masquée tant qu'on n'a pas touché « Autre »"
+# Le champ écrit sous la clé de la QUESTION : une clé à part obligerait
+# `ia.py` à fusionner, et ferait diverger `reponses_json`.
+assert '<input type="text" class="saisie-libre" data-cle="defaut"' in r.text, \
+    "le champ libre doit écrire sous la clé de la question elle-même"
+
+p_libre = bd.resoudre("Champ", "Libre").unique
+inedit = "Je collectionne les trains miniatures"
+uid_libre = c_libre.post("/valider",
+                         data={"personne_uuid": p_libre.uuid, "metier": "aiguilleur",
+                               "defaut": inedit},
+                         follow_redirects=False).headers["location"].rsplit("/", 1)[-1]
+assert _json.loads(bd.lire(uid_libre).reponses_json)["defaut"] == inedit
+
+# Et il atteint le modèle comme n'importe quelle réponse, sans traitement à
+# part : c'était toute la raison de ne pas créer une seconde clé.
+_envoye = {}
+import httpx as _hx
+_vrai = _hx.post
+
+
+def _espion(url, json=None, headers=None, timeout=None):
+    _envoye.update(json or {})
+    raise _hx.ConnectTimeout("interrompu après capture")
+
+
+_hx.post = _espion
+os.environ["ANTHROPIC_API_KEY"] = "cle-de-test"
+try:
+    try:
+        ia.generer(main.CONFIG, {"lieu": comte, "couple": main.COUPLE,
+                                 "reponses": _json.loads(bd.lire(uid_libre).reponses_json),
+                                 "noms_interdits": []})
+    except ia.ErreurGeneration:
+        pass
+finally:
+    _hx.post = _vrai
+    os.environ.pop("ANTHROPIC_API_KEY", None)
+assert inedit in str(_envoye), "la réponse libre n'atteint pas le modèle"
+print("TOUT PASSE — la réponse libre voyage sous la même clé et atteint le modèle")
+
+# --- Reprendre une réponse libre rouvre le champ, pas un écran vide -------
+# Le gabarit marque un bouton « retenu » quand la réponse égale une option. Un
+# texte libre n'égale aucune option : sans traitement, l'invité qui revient
+# corriger verrait son écran vierge et son texte perdu.
+page = c_libre.get(f"/portrait/{uid_libre}/reprendre").text
+# Sur le champ LIBRE et non n'importe où dans la page : le champ caché de la
+# question porte la même valeur, et l'assertion passait donc même quand le
+# champ visible revenait vide.
+_libre_recharge = _re.search(
+    r'<input type="text" class="saisie-libre"[^>]*value="([^"]*)"', page)
+assert _libre_recharge and _libre_recharge.group(1) == inedit, \
+    f"le texte libre n'est pas rechargé dans son champ : {_libre_recharge}"
+assert 'aria-expanded="true"' in page, "le champ doit être déplié à la reprise"
+assert page.count("choix retenu") == page.count('class="choix retenu"')
+
+# Et une réponse qui EST une option ne déplie rien.
+uid_option = test_outils.creer_chronique(
+    "Option", "Simple", {"metier": "x", "defaut": "Je parle trop"}, main.CODES_LIEUX)
+page = c_libre.get(f"/portrait/{uid_option}/reprendre").text
+assert 'aria-expanded="false"' in page, "une option ne doit pas ouvrir le champ libre"
+print("TOUT PASSE — reprendre une réponse libre rouvre le champ avec son texte")

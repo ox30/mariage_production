@@ -9,7 +9,7 @@
 
   {% if plan %}
     {% if not plan.recevable %}
-      <h2 style="color:#a4442e">Fichier refusé</h2>
+      <h2 class="alerte">Fichier refusé</h2>
       {# EX-ADM-15 — rejet du fichier ENTIER. Importer les lignes saines
          laisserait un état dont personne ne saurait dire ce qu'il contient. #}
       {% if plan.conflits %}
@@ -35,7 +35,7 @@
       <p>{{ plan.lignes_lues }} ligne(s) lue(s).</p>
 
       {% if plan.avertissements %}
-        <p style="color:#8a6d1f">À vérifier&nbsp;:</p>
+        <p class="vigilance">À vérifier&nbsp;:</p>
         <ul>{% for a in plan.avertissements %}<li>{{ a }}</li>{% endfor %}</ul>
       {% endif %}
 
@@ -61,7 +61,7 @@
       {% endif %}
 
       {% if plan.inactivations %}
-        <h3 style="color:#a4442e">{{ plan.inactivations|length }} à désactiver</h3>
+        <h3 class="alerte">{{ plan.inactivations|length }} à désactiver</h3>
         <p class="discret">Absentes du fichier. Rien n'est supprimé&nbsp;:
            elles disparaissent des listes et peuvent revenir (EX-ADM-07).</p>
         <ul>{% for p in plan.inactivations[:40] %}

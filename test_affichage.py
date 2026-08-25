@@ -172,3 +172,29 @@ attendue_br = main.locution_lieu(bd.lire(uid_br).lieu)
 assert f"convoquera {attendue_br}" in page_br, page_br[:600]
 assert "convoqué" not in page_br, "le passé composé impose un accord"
 print("TOUT PASSE — la convocation emploie la locution juste, au futur")
+
+# --- Aucun lien ne prend les couleurs du navigateur -----------------------
+# Constaté le 25 août : les onglets d'administration, « ← Revenir » et « Ce
+# n'est pas vous ? » s'affichaient en bleu et en violet — les couleurs par
+# défaut du navigateur, illisibles sur fond nocturne et étrangères à la
+# palette. La feuille de style ne réglait `a { color }` nulle part.
+_racine = pathlib.Path(__file__).parent
+_style = (_racine / "static" / "style.css").read_text(encoding="utf-8")
+for regle in ("a, a:link, a:visited", ".onglet, .onglet:link, .onglet:visited"):
+    assert regle in _style, f"« {regle} » manque : le navigateur reprend la main"
+# `:visited` explicitement : sans lui, un lien déjà suivi repasse au violet,
+# et c'est précisément le cas de tous les liens d'un parcours qu'on refait.
+assert _style.count(":visited") >= 3, "les liens visités retomberont au violet"
+
+# Et aucun gabarit ne réinvente une couleur : les codes en dur du premier jet
+# — #3a332c, #8a6d1f, #a4442e — n'appartenaient à aucune palette du projet.
+import re as _re
+
+for _gabarit in sorted((_racine / "templates").glob("*.html")):
+    _texte = _gabarit.read_text(encoding="utf-8")
+    for _regle in _re.findall(r'style="([^"]*)"', _texte):
+        assert "color" not in _regle, (
+            f"{_gabarit.name} fixe une couleur en dur : « {_regle} ». Les "
+            "couleurs vivent dans style.css, où elles se corrigent une fois "
+            "pour tous les écrans.")
+print("TOUT PASSE — les liens et les couleurs restent dans la palette du projet")

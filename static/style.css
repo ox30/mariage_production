@@ -16,6 +16,23 @@
 
 * { box-sizing: border-box; }
 
+/* LES LIENS.
+   Sans cette règle, tout `<a>` hors bouton prenait le bleu du navigateur et le
+   violet des liens visités — illisibles sur fond nocturne, et étrangers à la
+   palette. Constaté le 25 août sur les onglets d'administration, « ← Revenir »
+   et « Ce n'est pas vous ? ».
+   Le laiton est la seule couleur d'accent du projet : c'est celle des boutons,
+   donc celle que l'œil a déjà appris à suivre. `:visited` est ramené dessus
+   explicitement, sinon le navigateur reprend la main. */
+a, a:link, a:visited { color: var(--laiton); text-decoration: underline;
+  text-underline-offset: 0.18em; }
+a:hover, a:focus { color: var(--brume); }
+
+/* Un lien à l'intérieur d'un paragraphe discret reste discret : il n'a pas à
+   crier plus fort que la phrase qui le porte. */
+.discret a, .discret a:link, .discret a:visited { color: var(--brume); }
+.discret a:hover, .discret a:focus { color: var(--laiton); }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -308,3 +325,67 @@ th { font-family: var(--titre); font-weight: 400; color: var(--brume-faible); fo
   color: var(--brume-faible);
 }
 .pli > summary:focus-visible { outline: 2px solid var(--laiton); outline-offset: 2px; }
+
+/* --- Administration ------------------------------------------------------
+   Les onglets sont des LIENS : chaque écran a son adresse, donc se recharge et
+   se rouvre après une coupure. Un onglet qui vit en mémoire est perdu dès que
+   l'écran du téléphone se verrouille. */
+.onglets { display: flex; gap: 0.4rem; margin: 0 0 1.8rem; flex-wrap: wrap; }
+
+.onglet, .onglet:link, .onglet:visited {
+  padding: 0.5rem 0.95rem;
+  border-radius: 0.3rem;
+  text-decoration: none;
+  background: var(--ardoise);
+  color: var(--brume-faible);
+  border: 1px solid var(--ardoise-clair);
+  font-size: 0.95rem;
+}
+.onglet:hover, .onglet:focus { color: var(--brume); border-color: var(--laiton); }
+
+/* L'onglet actif est plein, pas seulement souligné : à luminosité baissée, un
+   soulignement ne se distingue pas d'un lien ordinaire. */
+.onglet.actif, .onglet.actif:link, .onglet.actif:visited {
+  background: var(--laiton);
+  color: #16110a;
+  border-color: var(--laiton);
+}
+
+/* Deux registres d'alerte, tirés de la palette et non inventés au gabarit.
+   La braise pour ce qui bloque ou retire, le laiton pour ce qui appelle une
+   vérification sans rien empêcher. */
+.alerte { color: var(--braise); }
+.vigilance { color: var(--laiton); }
+
+.grille { width: 100%; border-collapse: collapse; margin: 0 0 1.4rem; }
+.grille th, .grille td {
+  padding: 0.5rem 0.55rem;
+  text-align: left;
+  border-bottom: 1px solid var(--ardoise-clair);
+  vertical-align: middle;
+}
+.grille th {
+  font-family: var(--titre);
+  font-weight: 400;
+  color: var(--brume-faible);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.grille code, legend code {
+  font-size: 0.9rem;
+  color: var(--laiton);
+  background: var(--ardoise);
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.2rem;
+}
+
+fieldset {
+  border: 1px solid var(--ardoise-clair);
+  border-radius: 0.3rem;
+  margin: 0 0 1rem;
+  padding: 0.9rem;
+}
+fieldset legend { padding: 0 0.4rem; }
+fieldset p { margin: 0 0 0.6rem; }
+fieldset p:last-child { margin-bottom: 0; }

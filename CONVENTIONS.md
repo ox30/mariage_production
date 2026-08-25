@@ -342,6 +342,20 @@ donnait « convoqué en Les Havres Gris » sur l'écran que tous les invités
 voient. Le futur (« convoquera ») évite au passage l'accord que le passé
 composé imposait.
 
+**Aucune couleur ne s'écrit dans un gabarit.** Elles vivent toutes dans
+`style.css`, où elles se corrigent une fois pour tous les écrans — et où la
+palette du projet est la seule source. Le 25 août, trois gabarits portaient
+des codes hexadécimaux inventés sur place, qui n'appartenaient à aucune
+palette. `test_affichage.py` refuse désormais tout `style="…color…"` dans un
+gabarit.
+
+**Les liens sont stylés explicitement, `:visited` compris.** Sans règle `a
+{ color }`, tout lien hors bouton prend le bleu du navigateur, et le violet dès
+qu'il a été suivi une fois — illisibles sur fond nocturne. Le laiton est la
+seule couleur d'accent du projet, celle des boutons, donc celle que l'œil a
+déjà appris à suivre. Un lien dans un paragraphe `.discret` reste en brume : il
+n'a pas à crier plus fort que la phrase qui le porte.
+
 **Les onglets d'administration sont des liens**, pas du JavaScript : chaque
 écran a son adresse, donc se recharge et se rouvre après une coupure. Un onglet
 qui vit en mémoire est un onglet perdu dès que l'écran du téléphone se
@@ -434,6 +448,12 @@ qu'elle prétend vérifier. Le helper `_attendre(condition)` sert à ça.
 fois le 25 août : lignes 6 et 8 attendues pour un YAML qui les portait en 3 et
 7, lignes 1 et 3 pour un classeur dont l'en-tête occupe la ligne 1. Le numéro
 se **dérive** du contenu qu'on vient d'écrire.
+
+**`commande | head || repli` n'exécute jamais le repli.** Le `||` porte sur le
+dernier maillon du tube, et `head` réussit toujours. Le 25 août, le bloc qui
+devait ajouter les styles d'administration n'a donc jamais tourné — et le
+défaut ne s'est vu qu'à l'écran, deux échanges plus tard. Une commande dont la
+sortie compte se vérifie sur sa sortie, pas sur son code de retour.
 
 **Un test de traversée de chemin doit viser une cible qui existe.** « Le fichier
 `../../config.yaml` est-il refusé ? » passait grâce à l'absence de la cible, pas

@@ -20,15 +20,15 @@
 
 <form method="post" action="/admin/regions">
   {% for r in regions %}
-    <fieldset style="border:1px solid #3a332c;margin:0 0 1rem;padding:0.8rem">
+    <fieldset>
       <legend class="discret"><code>{{ r.code }}</code></legend>
       <p><input type="text" name="libelle_{{ r.code }}" value="{{ r.libelle }}"
-                maxlength="80" style="width:100%" placeholder="Nom de la région"></p>
+                maxlength="80" placeholder="Nom de la région"></p>
       <p><input type="text" name="locution_{{ r.code }}" value="{{ r.locution }}"
-                maxlength="120" style="width:100%"
+                maxlength="120"
                 placeholder="avec sa préposition : à…, en…, aux…"></p>
       <p><input type="text" name="ombre_{{ r.code }}" value="{{ r.ombre }}"
-                maxlength="160" style="width:100%" placeholder="pendant d'ombre"></p>
+                maxlength="160" placeholder="pendant d'ombre"></p>
     </fieldset>
   {% endfor %}
   <button class="action" type="submit">Enregistrer les régions</button>

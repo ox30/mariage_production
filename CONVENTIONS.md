@@ -224,6 +224,32 @@ Trois règles apprises en écrivant ce module :
   l'index partiel dans son message — il dit « UNIQUE constraint failed:
   tache.objet_uuid » —, c'est donc sur ce texte qu'on discrimine.
 
+## Sauvegardes
+
+**Aucun interrupteur.** Une sauvegarde qu'on peut éteindre est une sauvegarde
+qui sera éteinte le jour où elle compte. La boucle tourne toutes les trois
+minutes sans condition ; c'est le **dépôt** qui est conditionnel.
+
+**Rien ne part si rien ne change.** Deux instantanés d'une base inchangée sont
+identiques au bit près — vérifié. Dix jours d'attente avant l'événement
+déposeraient sinon 4 800 fois le même fichier, soit 788 Mo pour zéro
+information.
+
+**Le piège, et pourquoi l'empreinte porte sur le contenu métier.** Écrire la
+ligne `sauvegarde` d'un dépôt modifie la base : l'instantané suivant diffère,
+donc il se redépose, et la boucle se nourrit d'elle-même. `sauvegarde` et
+`tache` sont donc exclues de l'empreinte. Elle porte sur **toutes les lignes de
+toutes les autres tables**, jamais sur une sélection de compteurs et de dates —
+une colonne oubliée dans une telle liste produirait un changement invisible,
+donc une sauvegarde qui n'a pas lieu.
+
+**Un plancher de six heures.** Sans lui, dix jours de calme seraient
+indiscernables d'une panne silencieuse des deux dépôts.
+
+**L'empreinte n'est mémorisée qu'après un dépôt réussi quelque part**, et dans
+un fichier du volume — sinon chaque redéploiement reverserait un instantané
+identique, et un échec des deux destinations serait pris pour un succès.
+
 ## Écarts assumés
 
 | Écart | Raison | Échéance |

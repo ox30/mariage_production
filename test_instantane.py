@@ -281,3 +281,97 @@ print("TOUT PASSE — aucune purge, hors file, boucle démarrable et arrêtable"
 
 import shutil  # noqa: E402
 shutil.rmtree(racine, ignore_errors=True)
+
+# --- Rien n'a changé, rien ne part ------------------------------------------
+# Deux instantanés d'une base inchangée sont identiques au bit près : sans ce
+# contrôle, dix jours d'attente avant l'événement déposeraient 4 800 fois le
+# même fichier, soit 788 Mo pour zéro information.
+#
+# LE PIÈGE : écrire la ligne `sauvegarde` d'un dépôt modifie la base, donc
+# l'instantané suivant diffère, donc il se redépose — la boucle se nourrirait
+# d'elle-même. L'empreinte porte donc sur le CONTENU MÉTIER, `sauvegarde` et
+# `tache` exclues.
+class DepotCompteur(depot_objet.DepotObjet):
+    def __init__(self):
+        self.nom = "compteur"
+        self.recus = []
+
+    def deposer(self, cle, contenu):
+        self.recus.append(cle)
+        return len(contenu)
+
+    def lire(self, cle):
+        return b"sonde de demarrage"
+
+    def supprimer(self, cle):
+        pass
+
+
+compteur = DepotCompteur()
+depot_objet.depots_actifs = lambda: [compteur]
+instantane._chemin_empreinte().unlink(missing_ok=True)
+# Les blocs précédents ont laissé des lignes : on repart d'une table vide,
+# sinon le décompte ci-dessous mesurerait leur travail.
+with bd.Seance() as s:
+    s.execute(sa.delete(Sauvegarde))
+    s.commit()
+
+assert instantane.un_passage(), "le premier passage dépose toujours"
+for tour in range(12):
+    assert instantane.un_passage() == [], \
+        f"passage {tour + 2} : rien n'a changé, rien ne doit partir"
+assert len(compteur.recus) == 1, \
+    f"{len(compteur.recus)} dépôts pour treize passages — la boucle " \
+    f"s'auto-alimente : la comptabilité des sauvegardes doit être exclue " \
+    f"de l'empreinte"
+
+# Et le journal des sauvegardes n'a bien qu'une ligne : un passage sans dépôt
+# n'écrit rien, sinon il modifierait la base qu'il observe.
+with bd.Seance() as s:
+    lignes = s.scalar(sa.select(sa.func.count()).select_from(Sauvegarde))
+assert lignes == 1, f"{lignes} lignes de sauvegarde pour un seul dépôt"
+
+# Une vraie modification relance le dépôt, immédiatement.
+bd.creer("Changement", "Reel", {"metier": "nouveau"}, main.CODES_LIEUX)
+assert instantane.un_passage(), "un changement de contenu doit repartir"
+assert len(compteur.recus) == 2
+assert instantane.un_passage() == [], "et le passage suivant se tait de nouveau"
+
+# Une tâche qui s'incrémente n'est PAS une modification à sauvegarder :
+# `EX-ARC-11` la rattrape au redémarrage, et la compter relancerait un dépôt
+# à chaque tentative.
+import taches  # noqa: E402
+
+taches.mettre_en_file("generation_chronique", "objet-sans-importance")
+assert instantane.un_passage() == [], \
+    "la file de tâches ne doit pas déclencher de sauvegarde"
+
+# --- Le plancher : un dépôt même sans changement --------------------------
+# Sans lui, dix jours de calme seraient indiscernables d'une panne silencieuse
+# des deux dépôts, et personne ne s'en apercevrait avant d'en avoir besoin.
+assert instantane.PLANCHER_S == 6 * 3600.0
+_plancher = instantane.PLANCHER_S
+instantane.PLANCHER_S = 0.0
+assert instantane.un_passage(), "le plancher doit forcer un dépôt"
+instantane.PLANCHER_S = _plancher
+
+# --- L'empreinte survit au redémarrage ------------------------------------
+# Sans cela, chaque redéploiement reverserait un instantané identique — et il
+# y en aura plusieurs d'ici au 5 septembre.
+avant = len(compteur.recus)
+empreinte, _ = instantane._derniere_deposee()
+assert empreinte and len(empreinte) == 64
+assert instantane.un_passage() == [], "l'empreinte mémorisée doit tenir"
+
+# Un échec des DEUX dépôts ne doit pas être pris pour un succès : le contenu
+# doit repartir au passage suivant.
+casse2 = DepotMuet("casse2", ecriture_ko=True)
+depot_objet.depots_actifs = lambda: [casse2]
+bd.creer("Apres", "Echec", {"metier": "z"}, main.CODES_LIEUX)
+instantane.un_passage()
+depot_objet.depots_actifs = lambda: [compteur]
+assert instantane.un_passage(), \
+    "après un échec total, le contenu doit repartir à la tentative suivante"
+
+depot_objet.depots_actifs = _vrais_depots
+print("TOUT PASSE — rien ne part si rien ne change, la boucle ne s'auto-alimente pas")

@@ -24,8 +24,10 @@ plus aucun antécédent sain. Mesuré : cent instantanés tiennent dans 300 Mo.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
+import sqlite3
 import threading
 
 import sqlalchemy as sa
@@ -37,8 +39,81 @@ from modeles import Sauvegarde
 
 PERIODE_S = 180.0
 
+# Plancher : même sans le moindre changement, un dépôt toutes les six heures.
+# Sans lui, dix jours de calme seraient indiscernables d'une panne silencieuse
+# des deux dépôts — et personne ne s'en apercevrait avant d'en avoir besoin.
+PLANCHER_S = 6 * 3600.0
+
+# Tables exclues de l'empreinte de contenu. `sauvegarde` d'abord, et c'est
+# l'essentiel : écrire la ligne d'un dépôt modifie la base, donc l'instantané
+# suivant diffère, donc il se redépose, et la boucle se nourrit d'elle-même.
+# `tache` ensuite : une tentative qui s'incrémente n'est pas une donnée à
+# préserver, et `EX-ARC-11` la rattrape de toute façon au redémarrage.
+TABLES_HORS_EMPREINTE = {"sauvegarde", "tache"}
+
+FICHIER_EMPREINTE = ".derniere-empreinte-deposee"
+
 _arret = threading.Event()
 _fil: threading.Thread | None = None
+
+
+def empreinte_contenu(chemin: pathlib.Path) -> str:
+    """Empreinte du **contenu métier** d'un instantané.
+
+    Porte sur toutes les lignes de toutes les tables sauf celles de
+    `TABLES_HORS_EMPREINTE`. Pas sur une sélection de compteurs et de dates :
+    une colonne oubliée dans une telle liste produirait un changement invisible,
+    donc une sauvegarde qui n'a pas lieu — exactement le défaut qu'on cherche à
+    ne pas créer.
+
+    Les lignes sont triées en Python plutôt que par la base : `VACUUM` peut
+    renuméroter les `rowid` des tables sans clé entière, ce qui rendrait
+    l'ordre de stockage instable et l'empreinte fausse.
+    """
+    empreinte = hashlib.sha256()
+    connexion = sqlite3.connect(f"file:{chemin}?mode=ro", uri=True)
+    try:
+        tables = sorted(
+            nom for (nom,) in connexion.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'")
+            if nom not in TABLES_HORS_EMPREINTE)
+        for table in tables:
+            empreinte.update(table.encode("utf-8"))
+            lignes = [repr(ligne) for ligne in connexion.execute(f"SELECT * FROM {table}")]
+            for ligne in sorted(lignes):
+                empreinte.update(ligne.encode("utf-8"))
+    finally:
+        connexion.close()
+    return empreinte.hexdigest()
+
+
+def _chemin_empreinte() -> pathlib.Path:
+    return config.projet().dossier_instantanes / FICHIER_EMPREINTE
+
+
+def _derniere_deposee() -> tuple[str | None, float]:
+    """(empreinte, horodatage) du dernier dépôt réussi. Survit au redémarrage.
+
+    Dans un fichier plutôt qu'en mémoire : sans cela, chaque redéploiement
+    reverserait un instantané identique, et il y en aura plusieurs d'ici au
+    5 septembre.
+    """
+    chemin = _chemin_empreinte()
+    if not chemin.is_file():
+        return None, 0.0
+    try:
+        empreinte, instant = chemin.read_text(encoding="utf-8").split(None, 1)
+        return empreinte, float(instant)
+    except (ValueError, OSError):
+        return None, 0.0
+
+
+def _memoriser_depot(empreinte: str) -> None:
+    chemin = _chemin_empreinte()
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    chemin.write_text(f"{empreinte} {config.maintenant().timestamp()}",
+                      encoding="utf-8")
 
 
 def produire(destination: pathlib.Path | None = None) -> pathlib.Path:
@@ -84,13 +159,33 @@ def _consigner(cible: str, succes: bool, octets: int, erreur: str | None) -> Non
         seance.commit()
 
 
-def un_passage() -> list[depot_objet.Resultat]:
-    """Produit un instantané et le pousse sur toutes les destinations."""
+def un_passage(forcer: bool = False) -> list[depot_objet.Resultat]:
+    """Produit un instantané et le pousse — **si le contenu a changé**.
+
+    Deux instantanés d'une base inchangée sont identiques au bit près :
+    vérifié. Sans ce contrôle, dix jours d'attente avant l'événement
+    déposeraient 4 800 fois le même fichier, soit 788 Mo pour zéro
+    information. La boucle tourne toujours toutes les trois minutes ; c'est le
+    dépôt qui est conditionnel, pas la production.
+
+    Aucun interrupteur : une sauvegarde qu'on peut éteindre est une sauvegarde
+    qui sera éteinte le jour où elle compte (EX-SAU-13). Ici le comportement
+    suit la réalité — rien ne change, rien ne part ; la soirée fait changer
+    quelque chose toutes les trois minutes, tout part.
+    """
     try:
         chemin = produire()
     except Exception as exc:
         _consigner("instantane", False, 0, f"{type(exc).__name__} — {exc}")
         raise
+
+    empreinte = empreinte_contenu(chemin)
+    precedente, dernier_depot = _derniere_deposee()
+    age = config.maintenant().timestamp() - dernier_depot
+    if not forcer and empreinte == precedente and age < PLANCHER_S:
+        # Rien n'a bougé et le plancher n'est pas atteint. L'instantané reste
+        # sur le volume — une copie de plus ne coûte rien — mais il ne part pas.
+        return []
 
     contenu = chemin.read_bytes()
     resultats = depot_objet.deposer_partout(f"instantanes/{chemin.name}", contenu)
@@ -103,6 +198,11 @@ def un_passage() -> list[depot_objet.Resultat]:
     for resultat in resultats:
         _consigner(resultat.destination, resultat.succes, resultat.octets,
                    resultat.erreur)
+    # L'empreinte n'est mémorisée qu'après un dépôt RÉUSSI quelque part :
+    # sinon un échec des deux dépôts serait pris pour un succès et le contenu
+    # ne repartirait jamais.
+    if any(r.succes for r in resultats):
+        _memoriser_depot(empreinte)
     return resultats
 
 

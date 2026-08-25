@@ -114,9 +114,18 @@ async def cycle_de_vie(_: FastAPI):
     print(acces.resume(), flush=True)
     bd.initialiser()
     fils = taches.demarrer()
-    print(f"worker          : {fils} fil(s) démarré(s), limite courante "
-          f"{taches.fils_actifs()} — réglable dans config.yaml sans "
-          f"redéployer (EX-ARC-20)", flush=True)
+    # « 16 démarrés, limite 8 » se lisait comme une incohérence — trois
+    # relectures pour comprendre que les fils au-delà de la limite dorment.
+    # Une ligne de démarrage doit se comprendre du premier coup : c'est celle
+    # qu'on scrute à 21 h en cherchant une anomalie, et elle en fabriquait une.
+    if fils:
+        actifs = taches.fils_actifs()
+        print(f"worker          : {actifs} fil(s) au travail sur {fils} en "
+              f"réserve — les autres dorment. `worker.fils` s'ajuste dans "
+              f"config.yaml sans redéployer (EX-ARC-20)", flush=True)
+    else:
+        print("worker          : inhibé (WORKER_ACTIF=0) — aucune tâche ne "
+              "sera traitée", flush=True)
     # EX-SAU-21 — une destination muette doit se signaler au démarrage, pas à
     # minuit. La sonde écrit puis relit un objet d'essai sur chaque dépôt.
     print(depot_objet.resume_sonde(), flush=True)

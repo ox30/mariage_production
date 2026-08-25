@@ -103,7 +103,13 @@ def verifier_au_demarrage() -> None:
             "    acces:\n      mot_de_passe: \"…\""
         )
     if normaliser(str(brut)) == normaliser(MOT_DE_PASSE_EXEMPLE):
+        # L'empreinte est jointe parce qu'elle tranche la seule question qui
+        # se pose alors : « ai-je modifié le bon fichier ? ». Le 25 août, une
+        # valeur éditée sur le volume n'était pas celle que l'application
+        # lisait, et rien ne permettait de distinguer les deux cas.
         raise config.ErreurConfiguration(
+            f"[fichier lu : {config.projet().chemin_configuration}, empreinte "
+            f"{config.empreinte(config.projet().chemin_configuration)}] "
             f"`acces.mot_de_passe` vaut encore « {MOT_DE_PASSE_EXEMPLE} », la "
             "valeur de exemples/config.yaml. Un fichier recopié depuis "
             "l'exemple et jamais relu a déjà envoyé les sauvegardes sous un "

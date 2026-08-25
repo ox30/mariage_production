@@ -217,3 +217,31 @@ print(f"étiquettes : uniques dans {len(list(RACINE.glob('test_*.py')))} fichier
       f"de test")
 
 print("TOUT PASSE — hygiène du dépôt et de l'image")
+
+# --- Le modèle de config.yaml ne porte aucune valeur réelle ----------------
+# Même famille qu'EX-SEC-18 : ce fichier est versionné, et il servira à
+# fabriquer le config.yaml de la PRODUCTION. S'il portait le mot de passe de
+# la répétition — qui aura circulé pendant tous les essais — le mariage en
+# hériterait par recopie, exactement comme l'identifiant de projet du 25 août.
+# Un commentaire ne se fait pas respecter tout seul.
+import yaml as _yaml
+
+_modele = _yaml.safe_load(
+    (RACINE / "exemples" / "config.yaml").read_text(encoding="utf-8"))
+import acces as _acces
+
+for _cle in ("mot_de_passe", "mot_de_passe_maries"):
+    _valeur = str(_modele.get("acces", {}).get(_cle, ""))
+    assert _acces.normaliser(_valeur) == _acces.normaliser(
+        _acces.MOT_DE_PASSE_EXEMPLE), (
+        f"exemples/config.yaml porte « {_valeur} » en `acces.{_cle}` au lieu "
+        f"de « {_acces.MOT_DE_PASSE_EXEMPLE} ». Le filet du démarrage refuse "
+        "la valeur d'exemple : y écrire une valeur réelle désarme le filet ET "
+        "propage cette valeur au projet de production par recopie.")
+
+# Le fichier doit dire ce qu'il est dès sa première ligne utile : la confusion
+# entre ce modèle et le config.yaml du volume a coûté un échange entier.
+_entete = (RACINE / "exemples" / "config.yaml").read_text(encoding="utf-8")[:900]
+assert "JAMAIS LU PAR L'APPLICATION" in _entete, \
+    "l'en-tête doit dire d'emblée que ce fichier n'est pas celui que l'application lit"
+print("TOUT PASSE — le modèle de config.yaml ne porte aucune valeur réelle")

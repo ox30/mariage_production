@@ -68,6 +68,21 @@ pas des paramètres de production mais des échappatoires d'essai :
 `test_config.py` s'en sert pour éprouver les chemins d'échec sans toucher au
 vrai volume.
 
+### Deux fichiers, le même nom
+
+`exemples/config.yaml` **n'est jamais lu par l'application.** C'est un modèle,
+versionné, à recopier sur le volume *puis à modifier*. Le fichier lu est celui
+du dossier de projet, sur le volume. La confusion entre les deux a coûté un
+échange entier le 25 août.
+
+Le modèle porte volontairement `a-definir` partout où une valeur est à
+choisir, et le démarrage **refuse** cette valeur : le filet et l'appât vont
+ensemble. Y écrire une valeur réelle désarmerait le filet *et* propagerait
+cette valeur au projet de production par recopie — le mot de passe de la
+répétition, qui aura circulé pendant tous les essais, deviendrait celui du
+mariage. `test_hygiene.py` le contrôle, parce qu'un commentaire ne se fait pas
+respecter tout seul.
+
 **Rien n'est recopié automatiquement du dépôt vers le volume.** Une copie faite
 une fois puis jamais rafraîchie a fait tourner l'application des heures sur une
 configuration périmée, sans aucun message d'erreur (`EX-ARC-19`). Un fichier
@@ -156,8 +171,23 @@ D'où `CMD ["…", "uvicorn serveur:app …"]` et non `main:app`.
 feuille de style : une page de panne qui dépend de ce qui est en panne ne
 s'affiche jamais. Le contrôle se fait sur les imports réels, par `ast`.
 
-Chaque démarrage écrit un résumé au journal, **empreinte de `questions.yaml`
-comprise**. Une ligne contre plusieurs heures de recherche.
+Chaque démarrage écrit un résumé au journal, **empreintes de `questions.yaml`
+et de `config.yaml` comprises**. Une ligne contre plusieurs heures de
+recherche. *L'empreinte de `config.yaml` manquait jusqu'au 25 août : une valeur
+qu'on croyait modifiée sur le volume ne l'était pas, et rien ne permettait de
+distinguer « mon édition n'a pas pris » de « ce n'est pas ce fichier-là ».*
+
+**Le `config.yaml` est chargé strictement : deux fois la même clé au même
+niveau est refusé.** PyYAML garde silencieusement la **dernière** occurrence.
+Ajouter un bloc `acces:` en tête d'un fichier qui en portait déjà un plus bas
+produit alors exactement l'inverse de ce qu'on croit avoir écrit — sans un
+mot. Le message nomme les deux numéros de ligne.
+
+**Un message d'erreur multiligne se fait réordonner par Railway.** Chaque ligne
+reçoit son propre horodatage et le tri les mélange : le 25 août, le cadre est
+arrivé en morceaux, son corps affiché avant son en-tête. `bloc_erreur()` émet
+donc d'abord le message **sur une seule ligne**, atomique et toujours lisible ;
+le cadre suit, pour le confort de lecture en local.
 
 **Une configuration refusée s'écrit comme une consigne, pas comme un bug.**
 `config.bloc_erreur()` encadre le message et le rend lisible sans dérouler de

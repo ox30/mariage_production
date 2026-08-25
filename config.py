@@ -246,8 +246,43 @@ def _avertissements_nom(identifiant: str) -> list[str]:
             f"AAAA-MM-JJ-identifiant attendue par EX-PRJ-02"]
 
 
+class _LecteurStrict(yaml.SafeLoader):
+    """YAML qui refuse deux fois la même clé au même niveau.
+
+    PyYAML garde silencieusement la **dernière** occurrence. Ajouter un bloc
+    `acces:` en tête d'un fichier qui en portait déjà un plus bas produit donc
+    exactement l'inverse de ce qu'on croit avoir écrit — et rien ne le dit.
+    C'est le mode de défaillance de tout ce projet : deux endroits qui
+    déclarent la même chose sans obligation de s'accorder.
+    """
+
+
+def _sans_doublon(lecteur, noeud, deep=False):
+    vues, paire = {}, {}
+    for cle_noeud, valeur_noeud in noeud.value:
+        cle = lecteur.construct_object(cle_noeud, deep=deep)
+        if cle in vues:
+            raise ErreurConfiguration(
+                f"la clé « {cle} » apparaît DEUX FOIS au même niveau, "
+                f"lignes {vues[cle]} et {cle_noeud.start_mark.line + 1}. "
+                "YAML garde silencieusement la dernière, ce qui donne "
+                "l'inverse de ce qu'on croit avoir écrit. Fusionner les deux "
+                "blocs en un seul.")
+        vues[cle] = cle_noeud.start_mark.line + 1
+        paire[cle] = lecteur.construct_object(valeur_noeud, deep=deep)
+    return paire
+
+
+_LecteurStrict.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _sans_doublon)
+
+
 def _charger_configuration(chemin: pathlib.Path) -> dict:
-    brut = yaml.safe_load(chemin.read_text(encoding="utf-8")) or {}
+    # `utf-8-sig` est une ceinture : mesuré, PyYAML absorbe déjà lui-même la
+    # marque d'ordre d'octets qu'un enregistrement depuis Windows peut poser.
+    # Aucun test ne le prouve, et c'est dit ici plutôt que d'écrire un contrôle
+    # incapable d'échouer.
+    brut = yaml.load(chemin.read_text(encoding="utf-8-sig"), _LecteurStrict) or {}
     if not isinstance(brut, dict):
         raise ErreurConfiguration(f"{chemin} ne contient pas un dictionnaire YAML")
     return brut
@@ -476,7 +511,13 @@ def bloc_erreur(exc: Exception) -> str:
     terre et où l'on cherche vite.
     """
     largeur = 78
-    lignes = [
+    # La ligne compacte AVANT le cadre. Railway attribue un horodatage à
+    # chaque ligne et les retrie : le cadre du 25 août est arrivé en morceaux,
+    # son corps affiché avant son en-tête. Cette ligne-ci est atomique, donc
+    # toujours lisible quel que soit le réordonnancement ; le cadre reste pour
+    # le confort de lecture en local.
+    lignes = ["", "CONFIGURATION REFUSÉE — " + " ".join(str(exc).split())]
+    lignes += [
         "",
         "┌" + "─" * largeur + "┐",
         "│ CONFIGURATION REFUSÉE — le service démarre, mais ne sert rien".ljust(largeur + 1) + "│",
@@ -525,6 +566,15 @@ def resume_demarrage() -> str:
         f"dossier         : {p.dossier}",
         f"base            : {p.chemin_base}",
         f"questions.yaml  : {p.chemin_questions}  [{empreinte(p.chemin_questions)}]",
+        # L'empreinte de config.yaml manquait, alors que celle de
+        # questions.yaml était là depuis l'étape 1. Le 25 août, une valeur
+        # qu'on croyait modifiée sur le volume ne l'était pas, et rien ne
+        # permettait de le voir : l'empreinte le dit en un coup d'œil, sans
+        # avoir à ouvrir le fichier.
+        (f"config.yaml     : {p.chemin_configuration}  "
+         f"[{empreinte(p.chemin_configuration)}]"
+         if p.chemin_configuration and p.chemin_configuration.is_file()
+         else "config.yaml     : aucun (repli de développement)"),
         f"fuseau affiché  : {nom_zone_affichage()}"
         f"  ({en_heure_locale(maintenant()):%Y-%m-%d %H:%M})",
     ]

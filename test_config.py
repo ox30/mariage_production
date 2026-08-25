@@ -297,3 +297,49 @@ assert "tzdata" in (RACINE / "requirements.txt").read_text(encoding="utf-8"), \
 print("TOUT PASSE — UTC en base, heure locale à l'écran")
 
 shutil.rmtree(volume)
+
+# --- Le config.yaml est lu strictement, et son empreinte est annoncée -------
+# Le 25 août, une valeur qu'on croyait modifiée sur le volume n'était pas celle
+# que l'application lisait, et rien ne permettait de le voir : le résumé
+# portait l'empreinte de questions.yaml mais pas celle de config.yaml.
+import config as _cfg
+
+_doublon = RACINE / "doublon.yaml"
+_doublon.write_text(
+    'projet:\n  nom: "Essai"\n'
+    'acces:\n  mot_de_passe: "mithril"\n'
+    'quotas:\n  generations_par_personne: 3\n'
+    'acces:\n  mot_de_passe: "a-definir"\n', encoding="utf-8")
+_leve = False
+try:
+    _cfg._charger_configuration(_doublon)
+except _cfg.ErreurConfiguration as _exc:
+    _leve = True
+    # Les DEUX lignes doivent être nommées : sans elles, il faut relire tout
+    # le fichier pour trouver laquelle des deux occurrences retirer. Les
+    # numéros sont DÉRIVÉS du contenu et non écrits en dur : mon premier jet
+    # attendait 6 et 8 pour un fichier qui portait les clés en 3 et 7, et
+    # l'échec ne disait rien du défaut réel.
+    _attendues = [str(i) for i, ligne in enumerate(
+        _doublon.read_text(encoding="utf-8").splitlines(), start=1)
+        if ligne.startswith("acces:")]
+    assert len(_attendues) == 2, _attendues
+    for _n in _attendues:
+        assert _n in str(_exc), f"ligne {_n} non citée : {_exc}"
+    assert "acces" in str(_exc), str(_exc)
+assert _leve, ("PyYAML garde silencieusement la DERNIÈRE des deux clés : "
+               "un bloc ajouté en tête donne l'inverse de ce qu'on a écrit")
+
+# Pas de contrôle du BOM ici : mesuré, PyYAML absorbe déjà la marque d'ordre
+# d'octets — c'est la spécification YAML, pas un hasard. La mutation qui
+# retirait `utf-8-sig` ne faisait donc tomber aucune assertion. Un contrôle
+# qui ne peut pas échouer ne prouve rien : il est retiré plutôt que gardé
+# pour la contenance. `utf-8-sig` reste dans `_charger_configuration` comme
+# ceinture, en toutes lettres pour ce qu'il est.
+
+# L'empreinte du fichier figure au résumé, comme celle de questions.yaml :
+# c'est ce qui dit en un coup d'œil si l'édition a pris.
+_doublon.unlink()
+resume = _cfg.resume_demarrage()
+assert "config.yaml" in resume, resume
+print("TOUT PASSE — config.yaml : clés dupliquées refusées, empreinte annoncée")

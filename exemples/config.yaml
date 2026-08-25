@@ -1,10 +1,24 @@
-# Exemple de `config.yaml` — à déposer dans un dossier de projet sur le volume,
-# par exemple /data/projets/2026-08-19-repetition/config.yaml
+# ============================================================================
+#  CE FICHIER N'EST JAMAIS LU PAR L'APPLICATION.
 #
-# Ce fichier n'est PAS lu depuis le dépôt. Il n'est là qu'à titre d'exemple, et
-# rien ne le recopie automatiquement : une copie faite une fois puis jamais
-# rafraîchie a déjà fait tourner l'application des heures sur une configuration
-# périmée, sans message d'erreur (EX-ARC-19).
+#  Le vrai config.yaml vit SUR LE VOLUME :  /data/projets/<dossier>/config.yaml
+#  Celui-ci n'en est que le MODÈLE, à recopier PUIS À MODIFIER.
+#
+#  Il porte volontairement « a-definir » partout où une valeur est à choisir,
+#  et le démarrage REFUSE cette valeur : c'est le filet qui attrape une recopie
+#  qu'on aurait oublié de modifier. Le filet et l'appât vont ensemble — ne
+#  jamais écrire ici la valeur réelle d'un projet.
+#
+#  Deux raisons. Le dépôt ne porte aucune valeur de projet réelle (EX-SEC-06).
+#  Et ce modèle servira à fabriquer le config.yaml de la PRODUCTION : s'il
+#  portait le mot de passe de la répétition, le mariage en hériterait par
+#  recopie, alors qu'il aura circulé pendant tous les essais.
+#
+#  Rien ne recopie automatiquement ce fichier vers le volume. Une copie faite
+#  une fois puis jamais rafraîchie a déjà fait tourner l'application des heures
+#  sur une configuration périmée, sans message d'erreur (EX-ARC-19). Le
+#  déploiement du dépôt ne touche jamais au volume.
+# ============================================================================
 #
 # ÉTAT — les blocs `projet:`, `acces:` (mot_de_passe), `ia:`, `worker:` et
 # `sauvegarde:` sont lus. `quotas:`, `tables:` et `table_test:` sont donnés
@@ -37,9 +51,8 @@ projet:
 # projet — c'est ce qui a envoyé les sauvegardes sous un préfixe orphelin le
 # 25 août. Laisser passer la valeur d'exemple ouvrirait la soirée à tous.
 acces:
-  mot_de_passe: "mithril"
-  mot_de_passe_maries: "maries"     
-# (celui-ci peut attendre, il n'est pas encore contrôlé — EX-AUTH-20 vient plus tard)
+  mot_de_passe: "a-definir"
+  mot_de_passe_maries: "a-definir"      # QR code dédié (EX-AUTH-20)
 
 # Les quotas sont des ALLOCATIONS. Aucun compteur de consommation n'est stocké :
 # les consommations se calculent depuis le journal (EX-GEN-07, EX-IA-21).

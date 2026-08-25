@@ -351,3 +351,29 @@ assert restantes == 0, f"{restantes} tâches non terminées"
 
 print("TOUT PASSE — le worker vide la file, puis s'arrête proprement")
 vider()
+
+# --- La ligne de démarrage du worker ne fabrique pas de fausse anomalie ----
+# « 16 fil(s) démarré(s), limite courante 8 » se lisait comme une incohérence :
+# les fils au-delà de la limite dorment, mais la ligne ne le disait pas. Ce
+# qu'on éprouve : les deux nombres sont présents ET leur rapport est expliqué.
+import main as _main, taches as _t
+
+_vrai_demarrer, _vrai_actifs = _t.demarrer, _t.fils_actifs
+_t.demarrer = lambda: 16
+_t.fils_actifs = lambda: 8
+import io, contextlib, asyncio
+_sortie = io.StringIO()
+try:
+    with contextlib.redirect_stdout(_sortie):
+        async def _passer():
+            async with _main.cycle_de_vie(_main.app):
+                pass
+        asyncio.run(_passer())
+finally:
+    _t.demarrer, _t.fils_actifs = _vrai_demarrer, _vrai_actifs
+_ligne = [l for l in _sortie.getvalue().splitlines() if l.startswith("worker")]
+assert len(_ligne) == 1, _sortie.getvalue()
+assert "8" in _ligne[0] and "16" in _ligne[0], _ligne[0]
+# Sans ce mot, les deux nombres restent une contradiction apparente.
+assert "dorment" in _ligne[0], _ligne[0]
+print("TOUT PASSE — la ligne du worker explique l'écart entre réserve et travail")

@@ -38,7 +38,7 @@ projet:
 # 25 août. Laisser passer la valeur d'exemple ouvrirait la soirée à tous.
 acces:
   mot_de_passe: "mithril"
-  mot_de_passe_maries: "a-definir"     
+  mot_de_passe_maries: "maries"     
 # (celui-ci peut attendre, il n'est pas encore contrôlé — EX-AUTH-20 vient plus tard)
 
 # Les quotas sont des ALLOCATIONS. Aucun compteur de consommation n'est stocké :

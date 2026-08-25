@@ -18,3 +18,7 @@ alembic==1.19.1
 
 # EX-SAU-19 — dépôts objets compatibles S3 : buckets Railway et Cloudflare R2.
 boto3==1.43.79
+# EX-ADM-05 — lecture du classeur d'import des invités. Version non figée à
+# dessein : openpyxl ne sert qu'à lire sept colonnes de texte, et l'épingler au
+# correctif près ferait plus de bruit de mise à jour que de risque évité.
+openpyxl==3.1.5

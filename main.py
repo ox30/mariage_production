@@ -18,11 +18,14 @@ SQLAlchemy, et la génération passe par la file de tâches persistée.
 import json
 import os
 from pathlib import Path
+import pathlib
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from urllib.parse import quote, urlparse
 
 import yaml
+from sqlalchemy import select
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -35,7 +38,9 @@ import config
 import depot_objet
 import ia
 import identite
+import import_invites
 import instantane
+import modeles
 import noms
 import panne
 import taches
@@ -153,7 +158,8 @@ app = FastAPI(title="Le Livre des Convoqués", lifespan=cycle_de_vie)
 # HTTPBasic sur `MOT_DE_PASSE_ADMIN` (EX-ADM-01). Faire saisir à
 # l'administrateur le mot de passe des invités en plus du sien n'ajouterait
 # rien à ce qu'il peut déjà faire.
-CHEMINS_LIBRES = ("/entrer", "/static/", "/tableau", "/deviner", "/sante")
+CHEMINS_LIBRES = ("/entrer", "/static/", "/admin", "/tableau", "/deviner",
+                  "/sante")
 
 
 def _hors_porte(chemin: str) -> bool:
@@ -766,6 +772,88 @@ def fin(request: Request):
 
 
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Import de la liste des invités (EX-ADM-05, EX-ADM-16)
+# --------------------------------------------------------------------------- #
+
+def _dossier_imports() -> Path:
+    """Les classeurs importés sont conservés sur le volume.
+
+    Trois raisons : la confirmation relit le fichier plutôt qu'un plan calculé
+    dix minutes plus tôt sur une base qui a pu changer ; le fichier part dans
+    les instantanés, donc dans les sauvegardes ; et savoir exactement ce qui a
+    été importé, et quand, vaut le kilo-octet que ça coûte.
+    """
+    dossier = config.projet().dossier / "imports"
+    dossier.mkdir(parents=True, exist_ok=True)
+    return dossier
+
+
+def _contexte_invites(request: Request, **extra) -> dict:
+    with bd.Seance() as seance:
+        actifs = list(seance.scalars(
+            select(modeles.Personne).where(modeles.Personne.active.is_(True))))
+    base = {
+        "request": request,
+        "total_actifs": len(actifs),
+        "total_import": sum(1 for p in actifs if p.source == "import"),
+        "total_libre": sum(1 for p in actifs if p.source != "import"),
+        "plan": None, "applique": False, "fichier": "", "liste_complete": False,
+    }
+    base.update(extra)
+    return base
+
+
+@app.get("/admin/invites", response_class=HTMLResponse)
+def admin_invites(request: Request, _: str = Depends(admin)):
+    return gabarits.TemplateResponse("admin_invites.html",
+                                     _contexte_invites(request))
+
+
+@app.post("/admin/invites/simuler", response_class=HTMLResponse)
+async def admin_invites_simuler(request: Request, _: str = Depends(admin)):
+    donnees = await request.form()
+    envoi = donnees.get("classeur")
+    if envoi is None or not getattr(envoi, "filename", ""):
+        return RedirectResponse("/admin/invites", status_code=303)
+
+    horodatage = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    chemin = _dossier_imports() / f"{horodatage}.xlsx"
+    chemin.write_bytes(await envoi.read())
+
+    liste_complete = donnees.get("liste_complete") == "oui"
+    try:
+        plan = import_invites.preparer(chemin, liste_complete=liste_complete)
+    except Exception as exc:  # openpyxl lève des types très variés
+        plan = import_invites.Plan(erreurs=[
+            f"le fichier n'a pas pu être lu ({type(exc).__name__}). "
+            "Est-ce bien un classeur .xlsx, et non un .xls ou un .csv "
+            "renommé ? Le gabarit est dans exemples/invites-gabarit.xlsx."])
+    return gabarits.TemplateResponse(
+        "admin_invites.html",
+        _contexte_invites(request, plan=plan, fichier=chemin.name,
+                          liste_complete=liste_complete))
+
+
+@app.post("/admin/invites/appliquer", response_class=HTMLResponse)
+async def admin_invites_appliquer(request: Request, _: str = Depends(admin)):
+    donnees = dict(await request.form())
+    nom = pathlib.PurePosixPath(donnees.get("fichier") or "").name
+    chemin = _dossier_imports() / nom
+    # Le nom vient d'un champ du formulaire : le réduire à son dernier segment
+    # et vérifier qu'il existe bien dans le dossier d'imports empêche qu'un
+    # `../../config.yaml` soit lu comme un classeur.
+    if not nom or not chemin.is_file():
+        return RedirectResponse("/admin/invites", status_code=303)
+
+    plan = import_invites.appliquer(
+        chemin, liste_complete=donnees.get("liste_complete") == "oui")
+    return gabarits.TemplateResponse(
+        "admin_invites.html",
+        _contexte_invites(request, plan=plan, applique=plan.recevable,
+                          fichier=nom))
+
+
 # Pages d'administration provisoires — reprises du banc d'essai.
 # Remplacées à l'étape 4 par l'écran de relecture (EX-ADM-19) et le tableau
 # de bord complet (EX-ADM-18).

@@ -225,6 +225,7 @@ un nom non.
 | `test_affichage.py` | rendu, échappement, appariement des lieux |
 | `test_acces.py` | porte fermée par défaut, cookie, en-têtes, refus au démarrage |
 | `test_identite.py` | deux portes, cookie d'appareil, homonymes, reconduction |
+| `test_import.py` | simulation, idempotence, rejet sur conflit, inactivation |
 
 `test_outils.py` n'est pas un test : il porte `client()`, qui ouvre le cycle de vie et franchit la porte — **après avoir vérifié qu'elle était fermée**. Sans ce contrôle, le jour où la porte ne fermerait plus rien, toute la suite continuerait de passer.
 
@@ -303,6 +304,37 @@ cookies rendrait trois générations neuves.
 peuvent se succéder sur le même téléphone : le rattachement suit la dernière,
 mais les chroniques déjà écrites gardent l'appareil de leur naissance.
 
+## L'import des invités
+
+**Rien ne s'écrit sans simulation préalable** (`EX-ADM-16`). `preparer()` calcule
+un plan, `appliquer()` l'exécute — et **relit le classeur** au lieu de rejouer le
+plan mémorisé : un plan calculé dix minutes plus tôt décrit une base qui a pu
+changer entre-temps, quelqu'un ayant pu créer son personnage pendant la lecture
+du rapport.
+
+**Deux écarts assumés, tous deux protecteurs :**
+
+*L'inactivation demande une case à cocher.* `EX-ADM-07` dit qu'une personne
+retirée du fichier devient inactive. Pris à la lettre, un fichier ne contenant
+qu'une table — pour corriger deux noms — désactiverait les quatre-vingt-dix
+autres invités, en silence. L'exigence dit ce qui arrive aux personnes
+*retirées* ; elle ne dit pas que tout fichier vaut liste complète. Sans la case,
+l'import n'est jamais soustractif.
+
+*Une personne ayant une chronique n'est jamais inactivée.* Elle sortirait de
+`personnes_par_nom` (filtre `active` posé au morceau B) et ne pourrait plus
+revoir son propre personnage. Le fichier ne fait pas autorité contre un fait
+accompli. Le rapport les liste à part.
+
+**Le classeur est conservé sur le volume**, dans `imports/`, horodaté : la
+confirmation le relit, il part dans les instantanés, et l'on sait exactement ce
+qui a été importé et quand. Le nom de fichier venant d'un champ de formulaire
+est réduit à son dernier segment, sans quoi `../piege.xlsx` serait lu comme un
+classeur.
+
+**Les lignes d'exemple du gabarit sont signalées.** Oubliées dans un fichier
+rempli, elles fabriqueraient des invités fictifs au milieu des vrais.
+
 ## Interface
 
 **Réutiliser les composants existants.** `.choix` sert au questionnaire comme
@@ -336,6 +368,16 @@ toujours sous cette forme.*
 **Attendre le fil avant de mesurer.** Les générations partent en arrière-plan.
 Une mesure prise juste après la requête constate l'état d'avant le travail
 qu'elle prétend vérifier. Le helper `_attendre(condition)` sert à ça.
+
+**Un numéro écrit en dur dans une assertion est presque toujours faux.** Trois
+fois le 25 août : lignes 6 et 8 attendues pour un YAML qui les portait en 3 et
+7, lignes 1 et 3 pour un classeur dont l'en-tête occupe la ligne 1. Le numéro
+se **dérive** du contenu qu'on vient d'écrire.
+
+**Un test de traversée de chemin doit viser une cible qui existe.** « Le fichier
+`../../config.yaml` est-il refusé ? » passait grâce à l'absence de la cible, pas
+grâce au filtre. Poser un vrai classeur atteignable, et vérifier d'abord qu'il
+l'est.
 
 **Une assertion qui cherche une chaîne dans un fichier entier peut être
 satisfaite par un commentaire.** Deux fois le 25 août : `« empreinte » not in

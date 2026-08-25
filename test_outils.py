@@ -53,9 +53,11 @@ def creer_chronique(prenom, nom, reponses, codes_lieux, etat="en_attente",
 
 def entrer_identite(client, prenom, nom, genre="", intention="creer"):
     """Parcourt l'écran d'identité comme le ferait un invité."""
-    return client.post("/identite",
+    # `/identite` est devenu l'écran de SÉLECTION dans la liste ; la saisie
+    # d'un nom au clavier vit désormais sous `/identite/libre`.
+    return client.post("/identite/libre",
                        data={"intention": intention, "prenom": prenom,
-                             "nom": nom, "genre": genre},
+                             "nom": nom, "genre": genre, "confirme": "oui"},
                        follow_redirects=False)
 
 

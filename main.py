@@ -477,11 +477,28 @@ def accueil(request: Request):
 
 
 @app.get("/identite", response_class=HTMLResponse)
-def ecran_identite(request: Request, intention: str = "creer"):
+def ecran_identite(request: Request, intention: str = "creer",
+                   erreur: str | None = None):
+    """EX-AUTH-19 — l'invité choisit son nom dans la liste importée."""
+    annuaire = bd.annuaire()
+    if not annuaire:
+        # Avant l'import il n'y a rien à choisir : envoyer sur une liste vide
+        # serait une impasse.
+        return RedirectResponse(f"/identite/libre?intention={_intention(intention)}",
+                                status_code=303)
     return gabarits.TemplateResponse(
         "identite.html",
         {"request": request, "intention": _intention(intention),
-         "prenom": None, "nom": None, "erreur": None})
+         "annuaire": annuaire, "erreur": erreur})
+
+
+@app.get("/identite/libre", response_class=HTMLResponse)
+def ecran_identite_libre(request: Request, intention: str = "creer"):
+    """EX-AUTH-19 — « je ne suis pas dans la liste »."""
+    return gabarits.TemplateResponse(
+        "identite_libre.html",
+        {"request": request, "intention": _intention(intention),
+         "prenom": None, "nom": None, "tables": bd.tables(), "erreur": None})
 
 
 def _intention(valeur: str | None) -> str:
@@ -505,22 +522,20 @@ def _suite_pour(request: Request, personne, intention: str,
         if intention == "revoir":
             reponse = RedirectResponse(f"/portrait/{chronique}", status_code=303)
         else:
-            # EX-AUTH-09 — la reconduction n'est plus muette. On ressaisissait
-            # son nom pour créer et on se retrouvait devant un portrait sans
-            # savoir pourquoi ; l'écran le dit, et rien n'est écrasé.
+            # EX-AUTH-09 — la reconduction n'est plus muette. On choisissait son
+            # nom pour créer et on se retrouvait devant un portrait sans savoir
+            # pourquoi ; l'écran le dit, et rien n'est écrasé.
             reponse = gabarits.TemplateResponse(
                 "identite_deja.html",
                 {"request": request, "prenom": personne.prenom,
                  "chronique_uuid": chronique})
     elif intention == "revoir":
-        return gabarits.TemplateResponse(
-            "identite.html",
-            {"request": request, "intention": "revoir",
-             "prenom": personne.prenom, "nom": personne.nom,
-             "erreur": "Ce nom est bien connu, mais aucun personnage n'a "
-                       "encore été écrit pour lui. Revenez à l'écran d'entrée "
-                       "et choisissez « Créer mon personnage »."},
-            status_code=404)
+        return RedirectResponse(
+            "/identite?intention=revoir&erreur="
+            + quote("Ce nom est bien sur la liste, mais aucun personnage n'a "
+                    "encore été écrit pour lui. Revenez à l'écran d'entrée et "
+                    "choisissez « Créer mon personnage ».", safe=""),
+            status_code=303)
     else:
         reponse = _ecran_questionnaire(request, personne)
 
@@ -549,53 +564,93 @@ def _ecran_questionnaire(request: Request, personne):
     )
 
 
-@app.post("/identite", response_class=HTMLResponse)
-async def valider_identite(request: Request):
-    donnees = dict(await request.form())
-    intention = _intention(donnees.get("intention"))
-    prenom = (donnees.get("prenom") or "").strip()[:40]
-    nom = (donnees.get("nom") or "").strip()[:40]
-    genre = donnees.get("genre") if donnees.get("genre") in ("masculin",
-                                                             "feminin") else None
-    if not prenom or not nom:
-        return RedirectResponse(f"/identite?intention={intention}",
-                                status_code=303)
-
-    resolution = bd.resoudre(prenom, nom)
-
-    # EX-AUTH-05 — plusieurs personnes portent ce nom. On demande, on ne
-    # devine pas : deviner donnerait à quelqu'un le personnage d'un autre.
-    if resolution.ambigue:
-        return gabarits.TemplateResponse(
-            "identite_choix.html",
-            {"request": request, "prenom": prenom, "nom": nom,
-             "candidates": resolution.candidates, "intention": intention})
-
-    if resolution.unique is not None:
-        return _suite_pour(request, resolution.unique, intention, genre)
-
-    if intention == "revoir":
-        return gabarits.TemplateResponse(
-            "identite.html",
-            {"request": request, "intention": "revoir", "prenom": prenom,
-             "nom": nom,
-             "erreur": "Aucun personnage n'a été écrit sous ce nom. "
-                       "Vérifiez l'orthographe, ou revenez à l'écran d'entrée "
-                       "pour en créer un."},
-            status_code=404)
-
-    # EX-AUTH-19 — la saisie libre, pour qui n'est pas dans la liste.
-    personne_uuid = bd.creer_personne_libre(prenom, nom, genre=genre)
-    return _suite_pour(request, bd.personne(personne_uuid), "creer", genre)
-
-
 @app.post("/identite/choisir", response_class=HTMLResponse)
 async def choisir_identite(request: Request):
     donnees = dict(await request.form())
     personne = bd.personne((donnees.get("personne_uuid") or "").strip())
     if personne is None:
         return RedirectResponse("/identite?intention=creer", status_code=303)
-    return _suite_pour(request, personne, _intention(donnees.get("intention")))
+    intention = _intention(donnees.get("intention"))
+
+    # Venant de l'écran de rapprochement, l'invité a saisi un nom plus complet
+    # que celui de la liste : on le lui reprend plutôt que de le lui refaire
+    # taper.
+    saisi_nom = (donnees.get("nom_complet") or "").strip()
+    if saisi_nom and not personne.nom:
+        bd.completer_nom(personne.uuid,
+                         donnees.get("prenom_complet") or personne.prenom,
+                         saisi_nom)
+        personne = bd.personne(personne.uuid)
+
+    # 48 invités sur 93 ont été importés sans nom de famille. On le demande une
+    # fois, ici, plutôt que de laisser la lacune jusqu'au bout — et le refus
+    # est sans conséquence.
+    if not personne.nom and intention != "revoir":
+        return gabarits.TemplateResponse(
+            "identite_completer.html",
+            {"request": request, "personne": personne, "intention": intention})
+
+    return _suite_pour(request, personne, intention)
+
+
+@app.post("/identite/completer", response_class=HTMLResponse)
+async def completer_identite(request: Request):
+    donnees = dict(await request.form())
+    personne = bd.personne((donnees.get("personne_uuid") or "").strip())
+    if personne is None:
+        return RedirectResponse("/identite?intention=creer", status_code=303)
+    bd.completer_nom(personne.uuid,
+                     (donnees.get("prenom") or personne.prenom)[:40],
+                     (donnees.get("nom") or "")[:40])
+    return _suite_pour(request, bd.personne(personne.uuid),
+                       _intention(donnees.get("intention")))
+
+
+@app.post("/identite/libre", response_class=HTMLResponse)
+async def valider_identite_libre(request: Request):
+    donnees = dict(await request.form())
+    intention = _intention(donnees.get("intention"))
+    prenom = (donnees.get("prenom") or "").strip()[:40]
+    nom = (donnees.get("nom") or "").strip()[:40]
+    genre = donnees.get("genre") if donnees.get("genre") in ("masculin",
+                                                             "feminin") else None
+    code_table = (donnees.get("code_table") or "").strip()[:40]
+    if not prenom:
+        return RedirectResponse(f"/identite/libre?intention={intention}",
+                                status_code=303)
+
+    exactes = bd.resoudre(prenom, nom)
+    if exactes.ambigue:
+        return gabarits.TemplateResponse(
+            "identite_choix.html",
+            {"request": request, "prenom": prenom, "nom": nom,
+             "candidates": exactes.candidates, "intention": intention})
+    if exactes.unique is not None:
+        return _suite_pour(request, exactes.unique, intention, genre)
+
+    # EX-AUTH-05 — ressemblance, avec confirmation. `confirme` dit que l'invité
+    # a déjà vu cet écran et répondu « je suis quelqu'un d'autre » : le
+    # reproposer en boucle l'enfermerait.
+    if donnees.get("confirme") != "oui":
+        proches = bd.rapprochements(prenom, nom)
+        if proches:
+            return gabarits.TemplateResponse(
+                "identite_rapprochement.html",
+                {"request": request, "prenom": prenom, "nom": nom,
+                 "candidats": proches, "intention": intention,
+                 "genre": genre, "code_table": code_table})
+
+    if intention == "revoir":
+        return RedirectResponse(
+            "/identite?intention=revoir&erreur="
+            + quote("Aucun personnage n'a été écrit sous ce nom.", safe=""),
+            status_code=303)
+
+    # EX-AUTH-19 — la saisie libre, pour qui n'est pas dans la liste.
+    personne_uuid = bd.creer_personne_libre(prenom, nom, genre=genre)
+    if code_table:
+        bd.affecter_table(personne_uuid, code_table)
+    return _suite_pour(request, bd.personne(personne_uuid), "creer", genre)
 
 
 @app.post("/valider")

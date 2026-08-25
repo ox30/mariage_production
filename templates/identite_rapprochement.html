@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Le Livre des Convoqués</p>
+  <h1>Êtes-vous déjà sur la liste&nbsp;?</h1>
+
+  {# EX-AUTH-05 — le coût d'une confirmation en trop est un geste ; celui d'un
+     faux négatif, deux personnages pour une personne, dont un que les mariés
+     ne pourront jamais deviner. #}
+  <p>Vous avez saisi <strong>{{ prenom }} {{ nom }}</strong>. Ce nom ressemble
+     à {{ "quelqu'un" if candidats|length == 1 else "plusieurs personnes" }}
+     que le Conseil connaît déjà.</p>
+
+  {% for p, motif in candidats %}
+    <form method="post" action="/identite/choisir" style="margin:0">
+      <input type="hidden" name="intention" value="{{ intention }}">
+      <input type="hidden" name="prenom_complet" value="{{ prenom }}">
+      <input type="hidden" name="nom_complet" value="{{ nom }}">
+      <button type="submit" name="personne_uuid" value="{{ p.uuid }}" class="choix">
+        C'est moi&nbsp;: {{ p.prenom }} {{ p.nom }}
+        <span class="discret" style="display:block;font-size:0.85em">
+          {% if p.nom_table %}table {{ p.nom_table }}{% else %}sans table{% endif %}{#
+          #}{% if p.a_une_chronique %} — a déjà un personnage{% endif %}
+        </span>
+      </button>
+    </form>
+  {% endfor %}
+
+  <form method="post" action="/identite/libre">
+    <input type="hidden" name="intention" value="{{ intention }}">
+    <input type="hidden" name="prenom" value="{{ prenom }}">
+    <input type="hidden" name="nom" value="{{ nom }}">
+    <input type="hidden" name="genre" value="{{ genre or '' }}">
+    <input type="hidden" name="code_table" value="{{ code_table or '' }}">
+    <input type="hidden" name="confirme" value="oui">
+    <button class="action sobre" type="submit">
+      Non, je suis quelqu'un d'autre
+    </button>
+  </form>
+</div>
+{% endblock %}

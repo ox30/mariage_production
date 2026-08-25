@@ -406,3 +406,15 @@ fieldset {
 fieldset legend { padding: 0 0.4rem; }
 fieldset p { margin: 0 0 0.6rem; }
 fieldset p:last-child { margin-bottom: 0; }
+
+/* Les tables se présentent en grille : dix boutons pleine largeur feraient
+   défiler l'écran deux fois, et le geste doit rester un coup d'œil. */
+.tables-choix { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+.tables-choix .choix { margin-bottom: 0; }
+@media (min-width: 30rem) {
+  .tables-choix { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Un nom masqué par le filtre ne doit pas laisser d'espace derrière lui. */
+.choix[hidden], .groupe-table[hidden] { display: none; }
+.groupe-table .surtitre { margin: 1.4rem 0 0.5rem; }

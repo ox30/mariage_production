@@ -22,6 +22,7 @@ import json
 import random
 import re
 import unicodedata
+import difflib
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -329,6 +330,199 @@ def resoudre(prenom: str, nom: str) -> Resolution:
                 .where(Chronique.personne_uuid == personne.uuid,
                        Chronique.supprimee.is_(False))) > 0
         return Resolution(candidates)
+
+
+# EX-AUTH-05 — seuil de ressemblance des noms.
+#
+# **Mesuré des deux côtés.** Sur la liste réelle de 93 invités, aucun seuil
+# entre 0,75 et 0,90 ne produit le moindre rapprochement par distance
+# d'édition : les homonymes de nom de famille y portent des prénoms trop
+# éloignés. Le seuil ne coûte donc rien en faux positifs sur cette liste — mais
+# il fallait encore vérifier qu'il attrape ce qu'il vise, et 0,85 ne
+# l'attrapait pas :
+#
+#     meyer / meier    0,800   ← le cas cité par le briefing
+#     meyer / mayer    0,800
+#     durand / durant  0,833
+#     schaer / schar   0,909
+#     meyer / muller   0,545   ← doit rester rejeté
+#     dupont / durand  0,500   ← doit rester rejeté
+#
+# 0,75 laisse plus de trois cents millièmes entre le dernier cas visé et le
+# premier cas à rejeter. Un seuil se choisit sur les deux bords, pas sur un
+# seul : mesuré sur les seuls faux positifs, 0,85 semblait gratuit et rejetait
+# pourtant l'exemple du cahier des charges.
+SEUIL_RESSEMBLANCE = 0.75
+
+
+def _cle_floue(valeur: str) -> str:
+    """Casse, accents, traits d'union et apostrophes retirés.
+
+    « Jean-Pierre », « jean pierre » et « JEANPIERRE » se comparent alors, ce
+    qui compte : une liste tapée sur trois claviers par quatre personnes n'a
+    aucune chance d'être homogène.
+    """
+    depouille = unicodedata.normalize("NFKD", str(valeur or "").strip().lower())
+    depouille = "".join(c for c in depouille if not unicodedata.combining(c))
+    return " ".join(depouille.replace("-", " ").replace("'", " ").split())
+
+
+def _ressemblent(a: str, b: str) -> bool:
+    return difflib.SequenceMatcher(None, a, b).ratio() >= SEUIL_RESSEMBLANCE
+
+
+def rapprochements(prenom: str, nom: str,
+                   sauf_uuid: str | None = None) -> list[tuple[Personne, str]]:
+    """EX-AUTH-05 — « un Jean-Pierre Meier existe déjà, c'est vous ? »
+
+    **Jamais flou sur les deux composantes à la fois.** Dans un mariage, la même
+    famille produit dix personnes du même nom : un flou simultané rapprocherait
+    « Marie Meyer » de « Marc Meyer », qui sont deux personnes, et noierait
+    l'invité sous des confirmations. Trois règles, chacune exigeant une
+    composante exacte :
+
+    1. nom identique, prénom proche — « Jean-Pierre » / « Jean-Pierre »
+    2. prénom identique, nom proche — « Meier » / « Meyer »
+    3. prénom identique, nom **absent en base** — le cas de 48 invités sur 93,
+       dont on ne connaissait pas le nom au moment de l'import. Sans elle,
+       « Coralie » qui tape « Coralie Berthoud » créerait un doublon, la
+       comparaison de `""` avec `Berthoud` ne ressemblant à rien.
+
+    Le coût d'une confirmation en trop est un geste ; celui d'un faux négatif,
+    deux personnages pour une personne, dont un que les mariés ne pourront
+    jamais deviner.
+    """
+    cle_prenom, cle_nom = _cle_floue(prenom), _cle_floue(nom)
+    if not cle_prenom:
+        return []
+    trouves = []
+    with Seance() as seance:
+        for personne in seance.scalars(
+                select(Personne).where(Personne.active.is_(True))
+                .order_by(Personne.prenom, Personne.nom)):
+            if personne.uuid == sauf_uuid:
+                continue
+            autre_prenom = _cle_floue(personne.prenom)
+            autre_nom = _cle_floue(personne.nom)
+            if (autre_prenom, autre_nom) == (cle_prenom, cle_nom):
+                continue  # identique : ce n'est pas un rapprochement, c'est elle
+            motif = None
+            if cle_nom and autre_nom == cle_nom and _ressemblent(cle_prenom,
+                                                                 autre_prenom):
+                motif = "prenom_proche"
+            elif autre_prenom == cle_prenom and cle_nom and autre_nom \
+                    and _ressemblent(cle_nom, autre_nom):
+                motif = "nom_proche"
+            elif autre_prenom == cle_prenom and not autre_nom:
+                motif = "nom_absent"
+            if motif:
+                personne.nom_table = _nom_table(seance, personne.table_uuid)
+                personne.a_une_chronique = seance.scalar(
+                    select(Chronique.uuid).where(
+                        Chronique.personne_uuid == personne.uuid,
+                        Chronique.supprimee.is_(False))) is not None
+                trouves.append((personne, motif))
+    return trouves
+
+
+def _nom_table(seance, table_uuid: str | None) -> str:
+    if not table_uuid:
+        return ""
+    table = seance.get(TableGroupe, table_uuid)
+    return table.nom if table else ""
+
+
+def annuaire() -> list[dict]:
+    """Toute la liste, groupée par table, pour l'écran de sélection.
+
+    Envoyée **entière** dans la page : 93 noms font deux kilo-octets, le filtre
+    se fait alors sans requête, et il fonctionne même si la 4G de la salle
+    flanche. Une recherche côté serveur ferait un aller-retour par frappe.
+
+    EX-AUTH-16 — cette liste ne sert qu'à trouver sa propre identité.
+    """
+    with Seance() as seance:
+        avec_chronique = set(seance.scalars(
+            select(Chronique.personne_uuid).where(
+                Chronique.supprimee.is_(False))))
+        tables = {t.uuid: t for t in seance.scalars(select(TableGroupe))}
+        gens = []
+        for personne in seance.scalars(
+                select(Personne).where(Personne.active.is_(True),
+                                       Personne.est_test.is_(False))
+                .order_by(Personne.prenom, Personne.nom)):
+            table = tables.get(personne.table_uuid)
+            gens.append({
+                "uuid": personne.uuid,
+                "prenom": personne.prenom,
+                "nom": personne.nom,
+                "table": table.nom if table else "",
+                "code_table": table.code if table else "",
+                "a_une_chronique": personne.uuid in avec_chronique,
+            })
+    # Les tables numériques d'abord dans leur ordre naturel — « 10 » après
+    # « 9 » —, puis celles qui n'en sont pas, puis les sans-table.
+    def rang(gens_de_table):
+        code = gens_de_table[0]
+        return (0, int(code), "") if code.isdigit() else (1 if code else 2, 0, code)
+
+    groupes: dict[tuple, list] = {}
+    for personne in gens:
+        groupes.setdefault((personne["code_table"], personne["table"]),
+                           []).append(personne)
+    return [{"code": code, "nom": nom or "Sans table", "gens": membres}
+            for (code, nom), membres in sorted(groupes.items(),
+                                               key=lambda p: rang(p[0]))]
+
+
+def completer_nom(personne_uuid: str, prenom: str, nom: str) -> bool:
+    """Laisse l'invité corriger ce que l'import ne savait pas.
+
+    Quarante-huit personnes ont été importées sans nom de famille. Plutôt que
+    de laisser ces lacunes jusqu'au bout, l'écran de confirmation propose de
+    les combler — la base s'enrichit d'elle-même pendant la soirée.
+
+    EX-AUTH-21 — capitalisé ici comme à la création, une seule fois.
+    """
+    prenom, nom = prenom.strip(), nom.strip()
+    if not prenom:
+        return False
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None:
+            return False
+        avant = (personne.prenom, personne.nom)
+        personne.prenom = noms.capitaliser(prenom)
+        personne.nom = noms.capitaliser(nom)
+        if (personne.prenom, personne.nom) != avant:
+            journaliser(seance, "nom_complete", objet_uuid=personne_uuid,
+                        objet_type="personne", acteur=personne_uuid,
+                        details={"avant": f"{avant[0]} {avant[1]}".strip(),
+                                 "apres": f"{personne.prenom} {personne.nom}".strip()})
+        seance.commit()
+    return True
+
+
+def affecter_table(personne_uuid: str, code_table: str) -> bool:
+    """La table de qui s'ajoute à la volée — facultative.
+
+    Sans elle, une personne ajoutée le soir même est impossible à situer pour
+    les mariés. Avec, elle se distingue de son homonyme d'une autre table.
+    """
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None:
+            return False
+        if not code_table.strip():
+            seance.commit()
+            return True
+        table = seance.scalar(select(TableGroupe)
+                              .where(TableGroupe.code == code_table.strip()))
+        if table is None:
+            return False
+        personne.table_uuid = table.uuid
+        seance.commit()
+    return True
 
 
 def creer_personne_libre(prenom: str, nom: str,

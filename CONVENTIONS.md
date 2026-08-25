@@ -295,6 +295,30 @@ se présenter aurait été reconduite vers la chronique de la première.
 trois issues : aucune, une, plusieurs. Rendre une liste force l'appelant à
 trancher, ce qui est précisément `EX-AUTH-05`.
 
+**La sélection dans la liste, et trois règles de rapprochement.** L'annuaire
+part **entier** dans la page — 93 noms font deux kilo-octets — et le filtre se
+fait en JavaScript, sans requête : il fonctionne encore si la 4G de la salle
+flanche, là où une recherche serveur ferait un aller-retour par frappe.
+
+`EX-AUTH-05` — **jamais flou sur les deux composantes à la fois.** Trois règles,
+chacune exigeant une composante exacte : nom identique et prénom proche, prénom
+identique et nom proche, prénom identique et nom **absent en base**. Un flou
+double rapprocherait « Martin Durant » de « Martine Durand » — 0,923 et 0,833 —
+qui sont deux personnes, souvent un couple, et noierait chaque famille
+nombreuse sous des confirmations.
+
+*Le seuil se choisit sur les deux bords.* Mesuré sur la liste réelle, aucun
+seuil entre 0,75 et 0,90 ne produit le moindre faux positif : 0,85 semblait
+donc gratuit — et rejetait « Meier » contre « Meyer », l'exemple même du
+briefing, qui vaut 0,800. Un seuil mesuré sur les seuls faux positifs n'est pas
+mesuré. `test_identite.py` éprouve les deux bords, cas visés et cas à rejeter.
+
+*La troisième règle fait tout le travail.* Sur la liste réelle, la distance
+d'édition ne se déclenche jamais — les homonymes de nom de famille y portent
+des prénoms trop éloignés. Les seuls rapprochements viennent des 48 invités
+importés sans nom de famille : sans cette règle, chacun créerait un doublon en
+tapant son vrai nom.
+
 **Deux cookies, deux rôles.** `acces` dit « cette personne a lu le carton » ;
 `appareil` dit « ce téléphone, c'est cette personne ». L'un ouvre la porte,
 l'autre reconnaît qui entre. Perdre le second ne coûte **aucun droit** : les
@@ -443,6 +467,11 @@ c'est-à-dire pour tout le monde. *Défaut constaté le 20 août.*
 ## Tests : ce qu'une assertion doit mesurer
 
 Deux règles, payées cher le 20 août.
+
+**`grep -c` compte des lignes, il ne dit pas si le test a réussi.** Le 25 août,
+un fichier affichait seize blocs verts et échouait au dix-septième : le compte
+était juste, le test était rouge. Une suite se lance sur son **code de
+retour**, jamais sur ce qu'elle a écrit.
 
 **Comparer un écart, pas une valeur absolue.** `nb_tentatives == 2` passait
 quoi qu'il arrive, parce que `enregistrer_portrait` journalise une tentative

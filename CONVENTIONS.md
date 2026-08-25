@@ -60,7 +60,15 @@ livré n'en porte plus.
 | **Variables d'environnement** — secrets, prénoms des mariés | ne doivent apparaître dans aucun fichier versionné (`EX-SEC-06`, `EX-SEC-18`) |
 | **`config.yaml`** du dossier de projet — type, quotas, mots de passe, modèle | modifiable sans redéployer ; le type est immuable (`EX-PRJ-04`) |
 | **`questions.yaml`** du dossier de projet — libellés, options, lieux, peuples, contrat de style | un libellé incompréhensible découvert à 21 h se corrige sans redéployer (`EX-PRJ-12`, `EX-QUE-12`) |
-| **Dépôt** — `questions.yaml` de référence, `exemples/config.yaml` | jamais lus en production ; `questions.yaml` sert en revanche de source réelle au projet de développement local |
+| **Dépôt** — `questions.yaml` de référence, `exemples/config.yaml`, `exemples/invites-gabarit.xlsx` | jamais lus en production ; `questions.yaml` sert en revanche de source réelle au projet de développement local |
+
+Le **gabarit d'import** est versionné en deux morceaux : `gabarit_invites.py`
+qui le produit, et le `.xlsx` qu'il produit. Le script est la pièce normative —
+un `.xlsx` est un binaire, et aucun diff ne montrerait qu'une colonne a changé
+de nom. `test_hygiene.py` contrôle sa liste de colonnes contre `EX-ADM-05`,
+parce qu'un gabarit qui dérive de l'import casse l'import en silence. Le
+classeur est versionné à côté pour n'avoir pas à installer `openpyxl` juste
+pour remplir une liste d'invités.
 
 Deux variables n'ont pas leur place dans `.env.example` parce qu'elles ne sont
 pas des paramètres de production mais des échappatoires d'essai :
@@ -216,6 +224,7 @@ un nom non.
 | `test_modeles.py` | schéma, compteurs dérivés, contraintes d'unicité |
 | `test_affichage.py` | rendu, échappement, appariement des lieux |
 | `test_acces.py` | porte fermée par défaut, cookie, en-têtes, refus au démarrage |
+| `test_identite.py` | deux portes, cookie d'appareil, homonymes, reconduction |
 
 `test_outils.py` n'est pas un test : il porte `client()`, qui ouvre le cycle de vie et franchit la porte — **après avoir vérifié qu'elle était fermée**. Sans ce contrôle, le jour où la porte ne fermerait plus rien, toute la suite continuerait de passer.
 
@@ -268,6 +277,32 @@ Corollaire pour l'étage : comme les réponses ne sont jamais que **fusionnées*
 jamais retirées, l'étage ne peut mécaniquement pas redescendre. Il dit ce que
 l'invité a donné, et ce qui a été donné l'a été.
 
+## L'identité
+
+**Une chronique appartient à une `personne`, désignée par son UUID.** Ni un
+nom, ni un cookie. `bd.creer()` prend un `personne_uuid` déjà résolu : refaire
+une résolution par le nom dans la couche de persistance serait une seconde
+source de vérité.
+
+*Le défaut qu'on a fermé :* `personne_par_nom` faisait un `scalar()` et
+renvoyait silencieusement la **première** de deux personnes du même nom. Or
+`EX-ADM-13` autorise deux homonymes distingués par leur colonne `Identifiant`
+— c'est même la seule raison d'être de cette colonne. La seconde Marie Meyer à
+se présenter aurait été reconduite vers la chronique de la première.
+`personnes_par_nom` renvoie donc une **liste**, et `resoudre()` un objet à
+trois issues : aucune, une, plusieurs. Rendre une liste force l'appelant à
+trancher, ce qui est précisément `EX-AUTH-05`.
+
+**Deux cookies, deux rôles.** `acces` dit « cette personne a lu le carton » ;
+`appareil` dit « ce téléphone, c'est cette personne ». L'un ouvre la porte,
+l'autre reconnaît qui entre. Perdre le second ne coûte **aucun droit** : les
+quotas sont rattachés à la personne (`EX-AUTH-03`), sans quoi effacer ses
+cookies rendrait trois générations neuves.
+
+**L'attribution est figée à la création** (`EX-AUTH-06`). Deux personnes
+peuvent se succéder sur le même téléphone : le rattachement suit la dernière,
+mais les chroniques déjà écrites gardent l'appareil de leur naissance.
+
 ## Interface
 
 **Réutiliser les composants existants.** `.choix` sert au questionnaire comme
@@ -314,6 +349,19 @@ d'essai du bloc d'erreur était trop court pour produire assez de lignes : le
 repliage n'était jamais atteint, et l'assertion qui le surveillait ne pouvait
 pas échouer. Les cas de test reprennent depuis les **messages réels** des
 incidents.
+
+**Jinja échappe le contenu des variables, pas le texte des gabarits.** Une
+assertion cherchant « n'a » dans une réponse échoue sur `n&#39;a` — et la faute
+ne se voit que sur les messages *dynamiques*, ce qui la rend d'autant plus
+déroutante. `test_identite.texte()` déséchappe avant de comparer.
+
+**Une mutation qui ne fait rien tomber n'accuse pas toujours le test.** Retirer
+le contrôle de chronique existante dans `main.py` n'a rien cassé : `bd.creer()`
+porte le même garde-fou. Deux barrages pour une même règle, et c'est voulu —
+la mutation devait donc retirer les deux. Mais retirer `definir_genre`, lui, ne
+cassait rien parce que le test ne couvrait que la création, où le genre arrive
+par un autre chemin ; là, c'était bien un trou de couverture. Distinguer les
+deux cas avant de conclure.
 
 Et toute assertion nouvelle se vérifie **dans les deux sens** : on réintroduit
 le défaut et on regarde le test tomber. Un test qui ne peut pas échouer ne
@@ -374,10 +422,9 @@ identique, et un échec des deux destinations serait pris pour un succès.
 | `EX-I18N-01` — aucun texte affiché n'est externalisé | `EX-I18N-02` est retirée, la langue est `fr`, aucune seconde langue n'est prévue, et l'événement est dans onze jours. Le bénéfice invoqué — corriger un libellé sans redéployer — ne s'obtiendrait pas avec un fichier de textes dans le dépôt : il faudrait le porter sur le volume avec toute la mécanique d'empreinte de `questions.yaml` | aucune |
 | `EX-SEC-05` — la porte ne compte pas les échecs par adresse IP | cent invités sur le wifi de la salle, ou derrière le NAT d'un même opérateur, partagent une adresse publique : un verrou par IP transformerait dix fautes de frappe en panne collective à 21 h. Remplacé par un délai d'une demi-seconde après échec, qui ralentit une énumération sans jamais fermer la porte à quelqu'un qui a le carton sous les yeux | accepté tel quel |
 | La CSP autorise `'unsafe-inline'` sur `script-src` | l'accueil, le questionnaire et le fragment de portrait portent leur comportement en `<script>` inline. Les extraire à onze jours de l'événement coûterait plus de risque qu'il n'en retire, et le rempart contre l'injection reste l'échappement Jinja2 (`EX-SEC-02`), qui est actif. Les nonces sont la bonne réponse, après l'événement | après l'événement |
+| La détection de doublon est **exacte**, pas encore approximative | `EX-AUTH-05` demande « un Jean-Pierre Meier existe déjà, c'est vous ? ». L'écran de choix existe depuis l'étape 2 et se déclenche sur un nom identique ; élargir son déclenchement à une distance d'édition ne touchera plus que la requête | étape 2, morceau D |
 | `config.py` ne valide que le bloc `projet:` ; `acces`, `quotas`, `ia`, `tables` sont exposés bruts | valider une forme avant d'avoir écrit le code qui la consomme, c'est la deviner | étape 2 |
 | Le contrôle `EX-SEC-18` se met en veille si `PRENOM_MARIEE` et `PRENOM_MARIE` sont absents de l'environnement | c'est le seul dessin qui n'exige pas d'écrire les prénoms dans un fichier versionné. Le garde-fou est l'exécution locale avec le `.env` chargé ; il n'y a pas d'intégration continue dans ce projet | accepté tel quel |
 | `etat_soiree` a une clé primaire entière et non un UUID (`EX-GEN-02`) | table à une seule ligne : une clé UUID n'y apporte rien et retire la garantie qui compte, qu'il n'y ait jamais deux phases simultanées. La contrainte `id = 1` le dit | accepté tel quel |
-| Le rapprochement des personnes se fait sur (prénom, nom) normalisé, sans confirmation | `EX-AUTH-05` (doublon approximatif) et `EX-AUTH-19` (sélection dans la liste importée) arrivent à l'étape 2. D'ici là, deux homonymes réels seraient confondus — mais la reconduction ne détruit rien, donc le pire cas est un invité qui voit le personnage d'un autre, pas un personnage effacé | étape 2 |
-| Ressaisir son nom reconduit vers la chronique existante sans écran d'explication | l'écran à deux entrées d'`EX-AUTH-09` — *créer* ou *revoir* son personnage — arrive à l'étape 2. D'ici là la reconduction est muette, mais non destructrice | étape 2 |
 | `EX-IA-43` est portée par un index unique partiel, mais la mise en file n'existe pas encore : `main.py` se contente de refuser si l'état est `en_cours` | vérification suivie d'écriture, donc théoriquement joueuse. La file rendra la course impossible | étape suivante |
 | `.dockerignore` est une liste d'exclusion, non d'inclusion | conforme à la lettre d'`EX-SEC-17`. Une liste d'inclusion couvrirait un nouveau type de fichier sensible, mais tout module oublié ferait échouer le démarrage — et `EX-SAU-09` gèle les déploiements le 5 septembre | accepté tel quel |

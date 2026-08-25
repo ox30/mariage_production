@@ -10,7 +10,7 @@ import contextlib
 # La porte du mot de passe unique est franchie une fois ici (EX-AUTH-18).
 ctx = test_outils.client(main.app); c = ctx
 assert c.get("/").status_code == 200, "accueil"
-r = c.post("/questionnaire", data={"prenom": "Florian", "nom": "Test"})
+r = test_outils.entrer_identite(c, "Florian", "Test")
 assert r.status_code == 200 and "Quel est ton métier" in r.text, "questionnaire"
 assert r.text.count('class="ecran') == 10, "7 questions + 2 conditionnelles + récapitulatif"
 
@@ -23,7 +23,7 @@ reponses = {
     "allegeance": "La Lumière",
     "souvenir": "le soir où on a raté le dernier train ensemble",
 }
-r = c.post("/valider", data=reponses, follow_redirects=False)
+r = test_outils.valider(c, reponses)
 assert r.status_code == 303, r.status_code
 uuid = r.headers["location"].split("/")[-1]
 
@@ -60,7 +60,7 @@ assert bd.lire(uuid).etage == 2 and "on verra bien" in bd.lire(uuid).reponses_js
 
 # répartition des lieux : 30 créations, écart maximal de 1
 for i in range(30):
-    bd.creer(f"P{i}", "X", {"metier": "x"}, main.CODES_LIEUX)
+    test_outils.creer_chronique(f"P{i}", "X", {"metier": "x"}, main.CODES_LIEUX)
 from collections import Counter
 compte = Counter(p.lieu for p in bd.lister())
 print("répartition :", sorted(compte.values()))
@@ -74,14 +74,14 @@ os.environ["PRENOM_MARIE"] = "Gaspard"
 importlib.reload(main)
 c2 = test_outils.client(main.app)
 
-r = c2.post("/questionnaire", data={"prenom": "Ana", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Ana", "Test")
 assert "Solène" in r.text and "Gaspard" in r.text, "prénoms substitués dans les libellés"
 assert 'name="souvenir_avec"' in r.text, "champ du sélecteur préalable"
 assert 'class="choix prealable"' in r.text, "boutons du sélecteur préalable"
 
 donnees = dict(reponses); donnees.update({"prenom": "Ana", "nom": "Test",
                                           "souvenir_avec": "Solène"})
-r = c2.post("/valider", data=donnees, follow_redirects=False)
+r = test_outils.valider(c2, donnees)
 uid2 = r.headers["location"].split("/")[-1]
 assert '"souvenir_avec": "Solène"' in bd.lire(uid2).reponses_json, "réponse préalable stockée"
 
@@ -97,11 +97,11 @@ assert "jamais écrire" in msg
 print("TOUT PASSE — sélecteur préalable et prénoms des mariés")
 
 # --- Bifurcation avant génération -------------------------------------------
-r = c2.post("/questionnaire", data={"prenom": "Bea", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Bea", "Test")
 assert 'data-suite="bonus"' in r.text and "Créer mon personnage" in r.text, "écran de bifurcation"
 
 d = dict(donnees); d.update({"prenom": "Bea", "nom": "Test", "suite": "bonus"})
-r = c2.post("/valider", data=d, follow_redirects=False)
+r = test_outils.valider(c2, d)
 assert "/bonus/" in r.headers["location"] and "/questions" in r.headers["location"]
 uid3 = r.headers["location"].split("/")[2]
 assert bd.lire(uid3).etat == "brouillon", bd.lire(uid3).etat
@@ -125,7 +125,7 @@ msg = ia._construire_message(main.CONFIG, {
 assert "sans complément" in msg and "Exploite-les toutes" in msg
 
 d2 = dict(donnees); d2.update({"prenom": "Cyd", "nom": "Test", "suite": "bonus"})
-uid4 = c2.post("/valider", data=d2, follow_redirects=False).headers["location"].split("/")[2]
+uid4 = test_outils.valider(c2, d2).headers["location"].split("/")[2]
 c2.post(f"/bonus/{uid4}", data={"phrase": "on verra", "talent": "je siffle"},
         follow_redirects=False)
 assert bd.lire(uid4).etage == 2
@@ -138,7 +138,7 @@ assert c2.get(f"/bonus/{uid4}", follow_redirects=False).status_code == 303
 print("TOUT PASSE — bifurcation avant génération")
 
 # --- Boutons de la bifurcation : libellé et action doivent concorder ---------
-r = c2.post("/questionnaire", data={"prenom": "Dan", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Dan", "Test")
 assert 'name="suite" id="champ-suite"' in r.text, "le choix passe par un champ caché"
 assert r.text.count('data-suite="maintenant"') == 1
 assert r.text.count('data-suite="bonus"') == 1
@@ -151,13 +151,13 @@ for bloc in _re.findall(r'<button[^>]*class="[^"]*envoi[^"]*"[^>]*>', r.text):
 
 # le champ caché pilote réellement le routage
 d = dict(donnees); d.update({"prenom": "Dan", "nom": "Test", "suite": "bonus"})
-assert "/bonus/" in c2.post("/valider", data=d, follow_redirects=False).headers["location"]
+assert "/bonus/" in test_outils.valider(c2, d).headers["location"]
 d["suite"] = "maintenant"
-assert "/portrait/" in c2.post("/valider", data=d, follow_redirects=False).headers["location"]
+assert "/portrait/" in test_outils.valider(c2, d).headers["location"]
 
 # sortie du questionnaire complémentaire par le champ caché
 d2 = dict(donnees); d2.update({"prenom": "Eve", "nom": "Test", "suite": "bonus"})
-uid5 = c2.post("/valider", data=d2, follow_redirects=False).headers["location"].split("/")[2]
+uid5 = test_outils.valider(c2, d2).headers["location"].split("/")[2]
 r = c2.get(f"/bonus/{uid5}/questions")
 assert 'data-suite="sortie"' in r.text and 'class="retour envoi"' in r.text
 c2.post(f"/bonus/{uid5}", data={"suite": "sortie", "phrase": "ignorée"},
@@ -208,7 +208,7 @@ assert "décor du portrait, pas son sujet" in msg
 print("TOUT PASSE — cloisonnement par destination")
 
 # --- Ombre : questions conditionnelles, peuples, cloisonnement --------------
-r = c2.post("/questionnaire", data={"prenom": "Fay", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Fay", "Test")
 assert 'data-condition-cle="allegeance"' in r.text
 assert r.text.count('data-condition-valeur="L&#39;Ombre"') == 2, "deux écrans conditionnels"
 assert "Un monstre, et j'assume" in r.text.replace("&#39;", "'")
@@ -229,7 +229,7 @@ sombre.update({"prenom": "Fay", "nom": "Test", "allegeance": "L'Ombre",
                "attachement": "La nature",
                "monstre": "Un monstre, et j'assume",
                "destin": "Oui, et que ce soit spectaculaire", "suite": "maintenant"})
-uid6 = c2.post("/valider", data=sombre, follow_redirects=False).headers["location"].split("/")[-1]
+uid6 = test_outils.valider(c2, sombre).headers["location"].split("/")[-1]
 stocke = bd.lire(uid6).reponses_json
 assert "spectaculaire" in stocke and "j'assume" in stocke, "les deux réponses sont stockées"
 
@@ -252,7 +252,7 @@ assert "jamais humiliant" in contrat
 print("TOUT PASSE — Ombre : conditionnelles et registres")
 
 # --- Un échec technique ne débite pas le quota de l'invité ------------------
-uid7 = bd.creer("Gil", "Test", {"metier": "x"}, main.CODES_LIEUX)
+uid7 = test_outils.creer_chronique("Gil", "Test", {"metier": "x"}, main.CODES_LIEUX)
 for _ in range(4):
     bd.enregistrer_echec(uid7, "529 overloaded_error")
 ligne = bd.lire(uid7)
@@ -279,7 +279,7 @@ assert bd.lire(uid7).nb_tentatives == avant, "aucun appel au-delà du garde-fou"
 print("TOUT PASSE — un échec ne débite pas le quota")
 
 # --- Un échec de génération ne consomme aucun crédit ------------------------
-uid7 = bd.creer("Gilo", "Test", {"metier": "x"}, main.CODES_LIEUX)
+uid7 = test_outils.creer_chronique("Gilo", "Test", {"metier": "x"}, main.CODES_LIEUX)
 for _ in range(5):
     bd.enregistrer_echec(uid7, "HTTP 529 — overloaded_error")
 assert bd.lire(uid7).nb_generations == 0, "cinq pannes, zéro crédit débité"
@@ -325,7 +325,7 @@ assert "en Comté" in ia._construire_message(main.CONFIG, {
     "lieu": comte, "reponses": base, "noms_interdits": [], "couple": main.COUPLE})
 
 # noms fictifs déjà attribués
-uid8 = bd.creer("Gilon", "Test", {"metier": "x"}, main.CODES_LIEUX)
+uid8 = test_outils.creer_chronique("Gilon", "Test", {"metier": "x"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid8, {"nom_fictif": "Skarn Rouille", "peuple": "orque",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 pris = bd.noms_fictifs_pris()
@@ -397,14 +397,14 @@ assert [q["cle"] for q in main.CONFIG["obligatoires"]][-1] == "souhait", \
 assert "souhait" not in [q["cle"] for q in main.CONFIG["bonus"]]
 assert main.NB_BONUS == 5 and main.NB_BONUS_MOT == "cinq"
 
-r = c2.post("/questionnaire", data={"prenom": "Hal", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Hal", "Test")
 assert "Que souhaites-tu à Solène et Gaspard" in r.text.replace("&#39;", "'")
 assert "cinq questions de plus" in r.text.lower()
 
 avec_voeu = dict(donnees)
 avec_voeu.update({"prenom": "Hal", "nom": "Test", "souhait": "Tout le bonheur du monde",
                   "suite": "maintenant"})
-uid9 = c2.post("/valider", data=avec_voeu, follow_redirects=False).headers["location"].split("/")[-1]
+uid9 = test_outils.valider(c2, avec_voeu).headers["location"].split("/")[-1]
 stocke = bd.lire(uid9).reponses_json
 assert "Tout le bonheur du monde" in stocke, "le vœu est bien enregistré dès l'étage 1"
 msg = ia._construire_message(main.CONFIG, {
@@ -442,7 +442,7 @@ assert mod_noms.initiales("jean", "d'alembert") == "J. A."
 assert mod_noms.initiales("anne-marie", "von gunten") == "A.-M. G."
 
 # la capitalisation a lieu à la création, une seule fois
-uid10 = bd.creer("jean-pierre", "GAGNEBIN", {"metier": "x"}, main.CODES_LIEUX)
+uid10 = test_outils.creer_chronique("jean-pierre", "GAGNEBIN", {"metier": "x"}, main.CODES_LIEUX)
 ligne = bd.lire(uid10)
 assert ligne.prenom == "Jean-Pierre" and ligne.nom == "Gagnebin"
 assert "Jean-Pierre" in bd.tous_les_prenoms() and "Gagnebin" in bd.tous_les_prenoms()
@@ -450,13 +450,15 @@ print("TOUT PASSE — capitalisation et initiales")
 
 # --- Genre du personnage ----------------------------------------------------
 # Cas réel du 18 août : « Jean-Pascal » a produit un personnage féminin.
-r = c2.post("/questionnaire", data={"prenom": "jean-pascal", "nom": "van der maas",
-                                    "genre": "masculin"})
-assert 'name="genre" value="masculin"' in r.text, "le genre traverse le questionnaire"
+r = test_outils.entrer_identite(c2, "jean-pascal", "van der maas", "masculin")
+# EX-IA-36 — le genre est posé à l'écran d'identité, jamais dans le
+# questionnaire. Ce qu'on éprouve maintenant, c'est qu'il ATTEINT la personne :
+# le champ caché du questionnaire ne le portait que par accident du parcours.
+assert bd.resoudre("jean-pascal", "van der maas").unique.genre == "masculin"
 
 d = dict(donnees); d.update({"prenom": "jean-pascal", "nom": "van der maas",
                              "genre": "masculin", "suite": "maintenant"})
-uid11 = c2.post("/valider", data=d, follow_redirects=False).headers["location"].split("/")[-1]
+uid11 = test_outils.valider(c2, d).headers["location"].split("/")[-1]
 ligne = bd.lire(uid11)
 assert ligne.genre == "masculin"
 assert ligne.prenom == "Jean-Pascal" and ligne.nom == "van der Maas"
@@ -506,9 +508,7 @@ premieres = {"metier": "Opérateur du trafic", "attachement": "Un travail fait p
              "defaut": "Je veux tout contrôler", "objet": "Mes clubs",
              "allegeance": "La Lumière", "souvenir_avec": "Les deux",
              "souvenir": "Une initiation au golf", "souhait": "Du bonheur"}
-r = c.post("/valider", data={"prenom": "Rejoue", "nom": "Essai",
-                             **premieres},
-           follow_redirects=False)
+r = test_outils.valider(c, {"prenom": "Rejoue", "nom": "Essai", **premieres})
 uid_rejoue = r.headers["location"].rsplit("/", 1)[-1]
 bd.ajouter_bonus(uid_rejoue, {"talent": "Créateur de cette application"})
 bd.enregistrer_portrait(uid_rejoue, {"nom_fictif": "Borin", "peuple": "nain",
@@ -518,16 +518,18 @@ avant_etage = bd.lire(uid_rejoue).etage
 avant_generations = bd.lire(uid_rejoue).nb_generations
 avant_lieu = bd.lire(uid_rejoue).lieu
 
-# 1. La saisie du nom seule reconduit, avant toute question.
-r = c.post("/questionnaire", data={"prenom": "rejoue", "nom": "ESSAI"},
-           follow_redirects=False)
-assert r.status_code == 303, "la saisie du nom doit reconduire, pas questionner"
-assert r.headers["location"] == f"/portrait/{uid_rejoue}", r.headers["location"]
+# 1. La saisie du nom seule reconduit, avant toute question — et depuis
+# EX-AUTH-09 elle le DIT, au lieu de rediriger en silence. C'est l'écart
+# « reconduction muette » de CONVENTIONS.md qui se referme ici.
+r = test_outils.entrer_identite(c, "rejoue", "ESSAI")
+assert r.status_code == 200, "la saisie du nom doit reconduire, pas questionner"
+assert "déjà un personnage" in r.text, r.text[:300]
+assert f"/portrait/{uid_rejoue}" in r.text, "l'écran doit mener au personnage existant"
+assert "Quel est ton métier" not in r.text, "le questionnaire ne doit pas rouvrir"
 
 # 2. Et le formulaire posté directement ne passe pas non plus.
-r = c.post("/valider", data={"prenom": "Rejoue", "nom": "Essai",
-                             "metier": "espion", "souhait": "autre chose"},
-           follow_redirects=False)
+r = test_outils.valider(c, {"prenom": "Rejoue", "nom": "Essai",
+                            "metier": "espion", "souhait": "autre chose"})
 assert r.headers["location"] == f"/portrait/{uid_rejoue}", "porte dérobée ouverte"
 
 relue = bd.lire(uid_rejoue)
@@ -549,8 +551,7 @@ base = {"metier": "Fauconnier", "attachement": "Ma famille",
         "defaut": "Je parle trop", "objet": "Ma longue-vue",
         "allegeance": "La Lumière", "souvenir_avec": "Les deux",
         "souvenir": "Un été à la mer", "souhait": "Beaucoup de joie"}
-r = c.post("/valider", data={"prenom": "Repri", "nom": "Se", **base},
-           follow_redirects=False)
+r = test_outils.valider(c, {"prenom": "Repri", "nom": "Se", **base})
 uid_r = r.headers["location"].rsplit("/", 1)[-1]
 
 
@@ -655,7 +656,7 @@ r = c.get(f"/portrait/{uid_r}")
 assert "questions de plus" not in r.text, "le second étage ne se propose qu'une fois"
 
 # --- Quota épuisé : la reprise est fermée -----------------------------------
-uid_q = bd.creer("Quota", "Plein", dict(base), main.CODES_LIEUX)
+uid_q = test_outils.creer_chronique("Quota", "Plein", dict(base), main.CODES_LIEUX)
 for _ in range(main.MAX_GENERATIONS):
     bd.enregistrer_portrait(uid_q, {"nom_fictif": "X", "peuple": "nain",
                                     "portrait": "p", "indice": "i",

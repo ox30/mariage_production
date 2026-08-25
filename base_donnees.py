@@ -22,6 +22,7 @@ import json
 import random
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime
 
 from alembic import command
@@ -32,7 +33,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import config
 import modeles
 import noms
-from modeles import Chronique, Journal, Personne
+from modeles import Appareil, Chronique, Journal, Personne
 
 CHEMIN = str(config.projet().chemin_base)
 
@@ -150,11 +151,27 @@ def _cle_nom(prenom: str, nom: str) -> tuple[str, str]:
     return noms.capitaliser(prenom), noms.capitaliser(nom)
 
 
-def personne_par_nom(seance: Session, prenom: str, nom: str) -> Personne | None:
+def personnes_par_nom(seance: Session, prenom: str, nom: str) -> list[Personne]:
+    """**Une liste**, jamais un objet seul.
+
+    `personne_par_nom` faisait un `scalar()` : avec deux personnes du même nom
+    en base, il en renvoyait silencieusement la première. Or l'import va
+    produire exactement ce cas — `EX-ADM-13` autorise deux homonymes distingués
+    par leur colonne `Identifiant`, et c'est même la seule raison d'être de
+    cette colonne. La seconde Marie Meyer à se présenter aurait été reconduite
+    vers la chronique de la première, sans un mot.
+
+    Rendre une liste force l'appelant à trancher — ce qui est précisément
+    `EX-AUTH-05`. L'ordre est stable pour que deux affichages successifs de
+    l'écran de confirmation ne permutent pas les deux choix sous le doigt.
+    """
     prenom, nom = _cle_nom(prenom, nom)
-    return seance.scalar(
-        select(Personne).where(Personne.prenom == prenom, Personne.nom == nom)
-    )
+    return list(seance.scalars(
+        select(Personne)
+        .where(Personne.prenom == prenom, Personne.nom == nom,
+               Personne.active.is_(True))
+        .order_by(Personne.identifiant_import, Personne.uuid)
+    ))
 
 
 def creer_personne(seance: Session, prenom: str, nom: str,
@@ -204,27 +221,27 @@ def assigner_lieu(seance: Session, codes_lieux: list[str]) -> str:
 # Chroniques
 # --------------------------------------------------------------------------- #
 
-def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
-          etat: str = "en_attente", genre: str | None = None) -> str:
-    """Crée la personne si nécessaire, puis sa chronique.
+def creer(personne_uuid: str, reponses: dict, codes_lieux: list[str],
+          etat: str = "en_attente", appareil_uuid: str | None = None) -> str:
+    """Crée la chronique d'une personne **déjà résolue**.
 
-    EX-IA-26 — **une seule chronique par personne.** Une deuxième tentative de
-    création reconduit vers la chronique existante, qui se modifie et se
-    régénère dans la limite des trois générations. Deux chroniques
-    produiraient deux marqueurs sur la carte, dont un que les mariés ne
-    pourraient jamais deviner.
+    La signature ne prend plus (prénom, nom) : l'identité se résout en amont,
+    à l'écran d'identité, et une résolution par le nom refaite ici serait une
+    seconde source de vérité — celle-là même qui confondait deux homonymes.
 
-    Le rapprochement se fait sur le couple (prénom, nom) normalisé. La
-    détection de doublon approximative avec confirmation (EX-AUTH-05) et la
-    sélection dans la liste importée (EX-AUTH-19) viennent à l'étape 2 : d'ici
-    là, deux homonymes réels seraient confondus.
+    EX-IA-26 — **une seule chronique par personne.** Une deuxième demande
+    reconduit vers la chronique existante, qui se modifie et se régénère dans
+    la limite des trois générations. Deux chroniques produiraient deux
+    marqueurs sur la carte, dont un que les mariés ne pourraient jamais
+    deviner.
+
+    EX-AUTH-06 — `appareil_uuid` est figé **à la création**. Changer d'identité
+    ensuite ne réécrit aucun objet déjà créé.
     """
     with Seance() as seance:
-        personne = personne_par_nom(seance, prenom, nom)
+        personne = seance.get(Personne, personne_uuid)
         if personne is None:
-            personne = creer_personne(seance, prenom, nom, genre=genre)
-        elif genre in ("masculin", "feminin") and personne.genre != genre:
-            personne.genre = genre
+            raise ValueError(f"personne inconnue : {personne_uuid}")
 
         existante = seance.scalar(
             select(Chronique).where(Chronique.personne_uuid == personne.uuid,
@@ -232,9 +249,7 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
         if existante is not None:
             # « Reconduit vers », et non « écrase ». Rien n'est touché : ni les
             # réponses, ni l'étage, ni le quota. Les réponses sont la seule
-            # chose irremplaçable du projet (EX-GEN-08) ; les remplacer parce
-            # que quelqu'un a ressaisi son nom serait la pire des portes
-            # dérobées.
+            # chose irremplaçable du projet (EX-GEN-08).
             #
             # Défaut constaté le 20 août : un second passage sous le même nom
             # avait effacé sept réponses et cinq complémentaires, consommé une
@@ -244,6 +259,8 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
 
         chronique = Chronique(
             personne_uuid=personne.uuid,
+            appareil_uuid=appareil_uuid,
+            est_test=personne.est_test,
             lieu=assigner_lieu(seance, codes_lieux),
             reponses_json=json.dumps(reponses, ensure_ascii=False),
             etat=etat,
@@ -253,25 +270,126 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
         return chronique.uuid
 
 
-def chronique_de(prenom: str, nom: str) -> str | None:
+def chronique_de_personne(personne_uuid: str) -> str | None:
     """L'identifiant de la chronique de cette personne, si elle en a une.
 
-    Interrogée dès la saisie du nom, pour reconduire l'invité vers son
-    personnage au lieu de lui faire répondre sept questions qui seraient
-    ensuite ignorées (EX-IA-26). L'écran à deux entrées d'EX-AUTH-09 et la
-    confirmation de doublon d'EX-AUTH-05 viennent à l'étape 2 ; d'ici là,
-    cette reconduction est ce qui protège les réponses déjà données.
+    Prend un uuid et non un nom : c'est ce qui distingue deux homonymes.
     """
-    if not prenom.strip() or not nom.strip():
-        return None
     with Seance() as seance:
-        personne = personne_par_nom(seance, prenom, nom)
-        if personne is None:
-            return None
         return seance.scalar(
             select(Chronique.uuid).where(
-                Chronique.personne_uuid == personne.uuid,
+                Chronique.personne_uuid == personne_uuid,
                 Chronique.supprimee.is_(False)))
+
+
+# --------------------------------------------------------------------------- #
+# Résolution de l'identité
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class Resolution:
+    """Ce que la saisie d'un nom a donné, sans décider de la suite.
+
+    Trois issues, et l'appelant les traite différemment : aucune personne
+    (création), une seule (le cas courant), plusieurs (`EX-AUTH-05` — il faut
+    demander laquelle). Renvoyer un objet plutôt qu'une personne évite que
+    l'appelant confonde « personne unique » et « première de plusieurs ».
+    """
+
+    candidates: list[Personne]
+
+    @property
+    def unique(self) -> Personne | None:
+        return self.candidates[0] if len(self.candidates) == 1 else None
+
+    @property
+    def ambigue(self) -> bool:
+        return len(self.candidates) > 1
+
+
+def resoudre(prenom: str, nom: str) -> Resolution:
+    """EX-AUTH-05 — qui répond à ce nom ? Sans rien créer ni choisir."""
+    if not prenom.strip() or not nom.strip():
+        return Resolution([])
+    with Seance() as seance:
+        candidates = personnes_par_nom(seance, prenom, nom)
+        for personne in candidates:
+            # Attaché à la lecture pour que l'écran de choix puisse dire ce qui
+            # distingue les candidates : celle qui a déjà un personnage, et
+            # celle qui n'en a pas.
+            personne.a_une_chronique = seance.scalar(
+                select(func.count()).select_from(Chronique)
+                .where(Chronique.personne_uuid == personne.uuid,
+                       Chronique.supprimee.is_(False))) > 0
+        return Resolution(candidates)
+
+
+def creer_personne_libre(prenom: str, nom: str,
+                         genre: str | None = None) -> str:
+    """EX-AUTH-19 — la saisie libre, pour qui n'est pas dans la liste."""
+    with Seance() as seance:
+        personne = creer_personne(seance, prenom, nom, genre=genre,
+                                  source="saisie_libre")
+        journaliser(seance, "personne_creee", objet_uuid=personne.uuid,
+                    objet_type="personne", acteur=personne.uuid,
+                    details={"source": "saisie_libre"})
+        seance.commit()
+        return personne.uuid
+
+
+def definir_genre(personne_uuid: str, genre: str) -> None:
+    """EX-IA-36 — posé à l'écran d'identité, jamais dans le questionnaire.
+
+    Écrasable : quelqu'un qui se reprend doit pouvoir se corriger. Ce qui n'est
+    PAS écrasable, c'est ce qui a déjà été produit avec l'ancienne valeur — le
+    portrait déjà écrit reste tel quel jusqu'à une réécriture demandée.
+    """
+    if genre not in ("masculin", "feminin"):
+        return
+    with Seance() as seance:
+        p = seance.get(Personne, personne_uuid)
+        if p is not None and p.genre != genre:
+            p.genre = genre
+            seance.commit()
+
+
+def personne(personne_uuid: str) -> Personne | None:
+    with Seance() as seance:
+        return seance.get(Personne, personne_uuid)
+
+
+# --------------------------------------------------------------------------- #
+# Appareils — EX-AUTH-02 : un raccourci, jamais un droit
+# --------------------------------------------------------------------------- #
+
+def rattacher_appareil(appareil_uuid: str, personne_uuid: str) -> None:
+    """Mémorise « ce téléphone, c'est cette personne ».
+
+    Sa perte ne coûte aucun droit : on ressaisit le mot de passe, on retrouve
+    son nom, sa chronique et ses crédits (EX-AUTH-02, EX-AUTH-03). Le
+    rattachement se réécrit — un poste partagé change de main — mais les objets
+    déjà créés gardent l'appareil de leur création (EX-AUTH-06).
+    """
+    with Seance() as seance:
+        appareil = seance.get(Appareil, appareil_uuid)
+        if appareil is None:
+            seance.add(Appareil(uuid=appareil_uuid, personne_uuid=personne_uuid,
+                                premiere_vue=maintenant(),
+                                derniere_vue=maintenant()))
+        else:
+            appareil.personne_uuid = personne_uuid
+            appareil.derniere_vue = maintenant()
+        seance.commit()
+
+
+def personne_de_l_appareil(appareil_uuid: str | None) -> Personne | None:
+    if not appareil_uuid:
+        return None
+    with Seance() as seance:
+        appareil = seance.get(Appareil, appareil_uuid)
+        if appareil is None:
+            return None
+        return seance.get(Personne, appareil.personne_uuid)
 
 
 # Renseigné au démarrage par main.py, seul module qui lit questions.yaml.

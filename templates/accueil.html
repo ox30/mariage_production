@@ -8,30 +8,23 @@
   <p class="discret">Votre nom ne sera jamais écrit dans le texte. Il servira
      seulement aux mariés, plus tard, pour vous reconnaître.</p>
 
-  <form method="post" action="/questionnaire">
-    <h2>Qui êtes-vous ?</h2>
-    <p><input type="text" name="prenom" placeholder="Prénom" maxlength="40" required
-              autocomplete="given-name"></p>
-    <p><input type="text" name="nom" placeholder="Nom" maxlength="40" required
-              autocomplete="family-name"></p>
-    <input type="hidden" name="genre" id="champ-genre" value="">
-    <p class="exemple" style="margin:1.2rem 0 0.6rem">Le personnage sera écrit…</p>
-    <button type="button" class="choix genre" data-valeur="masculin">Au masculin</button>
-    <button type="button" class="choix genre" data-valeur="feminin">Au féminin</button>
-    <button type="button" class="choix genre" data-valeur="">Peu importe</button>
-
-    <button class="action" type="submit">Commencer</button>
-  </form>
+  {# EX-AUTH-09 — deux entrées, plus un raccourci quand l'appareil est reconnu.
+     Le raccourci n'est pas une troisième porte : c'est « revoir » déjà
+     franchie, pour qui a répondu depuis ce téléphone. Sans lui, la plupart des
+     retours refont la saisie de leur nom pour arriver là où le téléphone
+     savait déjà les mener. #}
+  {% if reprise %}
+    <a class="action" href="{{ reprise.lien }}">Retrouver mon personnage</a>
+    <p class="discret" style="margin-top:0.6rem;text-align:center">
+      Ce téléphone est celui de {{ reprise.prenom }}.
+      <a href="/identite?intention=creer">Ce n'est pas vous&nbsp;?</a>
+    </p>
+  {% else %}
+    <a class="action" href="/identite?intention=creer">Créer mon personnage</a>
+    <a class="choix" href="/identite?intention=revoir"
+       style="display:block;text-align:center;margin-top:0.8rem">
+      Revoir mon personnage
+    </a>
+  {% endif %}
 </div>
-<script>
-document.querySelectorAll(".genre").forEach(function (b) {
-  b.addEventListener("click", function () {
-    document.querySelectorAll(".genre").forEach(function (x) {
-      x.classList.remove("retenu");
-    });
-    b.classList.add("retenu");
-    document.getElementById("champ-genre").value = b.dataset.valeur;
-  });
-});
-</script>
 {% endblock %}

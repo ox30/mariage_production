@@ -6,8 +6,11 @@
 <div class="progression"><span id="jauge"></span></div>
 
 <form method="post" action="{{ action }}" id="formulaire">
-  <input type="hidden" name="prenom" value="{{ prenom }}">
-  <input type="hidden" name="nom" value="{{ nom }}">
+  {# L'identité voyage par son UUID et non par (prénom, nom) : deux homonymes
+     réels ne se distinguent que par lui, et reposter un nom rouvrirait la
+     résolution que l'écran d'identité vient de trancher. Le prénom reste, mais
+     pour l'affichage seul. #}
+  <input type="hidden" name="personne_uuid" value="{{ personne_uuid or '' }}">
   <input type="hidden" name="genre" value="{{ genre }}">
 
   <div class="enveloppe">

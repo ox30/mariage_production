@@ -245,3 +245,25 @@ _entete = (RACINE / "exemples" / "config.yaml").read_text(encoding="utf-8")[:900
 assert "JAMAIS LU PAR L'APPLICATION" in _entete, \
     "l'en-tête doit dire d'emblée que ce fichier n'est pas celui que l'application lit"
 print("TOUT PASSE — le modèle de config.yaml ne porte aucune valeur réelle")
+
+# --- Le gabarit d'import ne dérive pas de la spécification -----------------
+# EX-ADM-05 fixe sept colonnes, dans cet ordre. Renommer « Prénom » dans le
+# gabarit sans toucher à l'import casserait l'import en silence, et un `.xlsx`
+# étant binaire, aucun diff ne le montrerait. Le contrôle porte donc sur le
+# SCRIPT, qui est du texte — et c'est pour cela qu'il est versionné.
+_source = (RACINE / "exemples" / "gabarit_invites.py").read_text(encoding="utf-8")
+_attendues = ["Identifiant", "Table", "Prénom", "Nom", "Genre",
+              "Responsable", "Marié"]
+_position = -1
+for _colonne in _attendues:
+    _trouve = _source.find(f'("{_colonne}"')
+    assert _trouve > 0, f"la colonne « {_colonne} » a disparu du gabarit (EX-ADM-05)"
+    assert _trouve > _position, \
+        f"« {_colonne} » n'est plus à sa place dans l'ordre d'EX-ADM-05"
+    _position = _trouve
+
+# Le classeur produit est versionné à côté : sans lui il faudrait installer
+# openpyxl pour simplement remplir la liste des invités.
+assert (RACINE / "exemples" / "invites-gabarit.xlsx").is_file(), \
+    "le classeur produit doit être versionné à côté de son script"
+print("TOUT PASSE — le gabarit d'import porte les sept colonnes d'EX-ADM-05")

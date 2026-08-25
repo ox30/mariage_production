@@ -34,6 +34,7 @@ import base_donnees as bd
 import config
 import depot_objet
 import ia
+import identite
 import instantane
 import noms
 import panne
@@ -419,27 +420,81 @@ async def valider_entree(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 def accueil(request: Request):
-    return gabarits.TemplateResponse("accueil.html", {"request": request})
+    """EX-AUTH-09 — deux entrées : créer son personnage, ou revoir le sien."""
+    reprise = None
+    personne = bd.personne_de_l_appareil(identite.du_requete(request))
+    if personne is not None:
+        chronique = bd.chronique_de_personne(personne.uuid)
+        if chronique:
+            reprise = {"prenom": personne.prenom,
+                       "lien": f"/portrait/{chronique}"}
+    return gabarits.TemplateResponse("accueil.html",
+                                     {"request": request, "reprise": reprise})
 
 
-@app.post("/questionnaire", response_class=HTMLResponse)
-def questionnaire(request: Request, prenom: str = Form(...), nom: str = Form(...),
-                  genre: str = Form("")):
-    # EX-IA-26 — le nom est confronté aux chroniques existantes DÈS SA SAISIE,
-    # et non à la validation des réponses. Laisser quelqu'un répondre à sept
-    # questions pour lui annoncer ensuite qu'il en avait déjà donné sept
-    # serait la plus mauvaise façon de faire respecter la règle.
-    deja = bd.chronique_de(prenom, nom)
-    if deja:
-        return RedirectResponse(f"/portrait/{deja}", status_code=303)
+@app.get("/identite", response_class=HTMLResponse)
+def ecran_identite(request: Request, intention: str = "creer"):
+    return gabarits.TemplateResponse(
+        "identite.html",
+        {"request": request, "intention": _intention(intention),
+         "prenom": None, "nom": None, "erreur": None})
 
+
+def _intention(valeur: str | None) -> str:
+    """Liste fermée. Une intention inconnue vaut « créer », jamais un plantage."""
+    return "revoir" if valeur == "revoir" else "creer"
+
+
+def _suite_pour(request: Request, personne, intention: str,
+                genre: str | None = None):
+    """Ce qui se passe une fois qu'on sait de QUI il s'agit.
+
+    Le cookie d'appareil est posé ici, et seulement ici : c'est le moment où
+    l'on connaît la personne. Il ne donne aucun droit (EX-AUTH-02) — il évite
+    de ressaisir son nom au prochain passage.
+    """
+    if genre in ("masculin", "feminin") and personne.genre != genre:
+        bd.definir_genre(personne.uuid, genre)
+
+    chronique = bd.chronique_de_personne(personne.uuid)
+    if chronique:
+        if intention == "revoir":
+            reponse = RedirectResponse(f"/portrait/{chronique}", status_code=303)
+        else:
+            # EX-AUTH-09 — la reconduction n'est plus muette. On ressaisissait
+            # son nom pour créer et on se retrouvait devant un portrait sans
+            # savoir pourquoi ; l'écran le dit, et rien n'est écrasé.
+            reponse = gabarits.TemplateResponse(
+                "identite_deja.html",
+                {"request": request, "prenom": personne.prenom,
+                 "chronique_uuid": chronique})
+    elif intention == "revoir":
+        return gabarits.TemplateResponse(
+            "identite.html",
+            {"request": request, "intention": "revoir",
+             "prenom": personne.prenom, "nom": personne.nom,
+             "erreur": "Ce nom est bien connu, mais aucun personnage n'a "
+                       "encore été écrit pour lui. Revenez à l'écran d'entrée "
+                       "et choisissez « Créer mon personnage »."},
+            status_code=404)
+    else:
+        reponse = _ecran_questionnaire(request, personne)
+
+    appareil = identite.du_requete(request) or identite.nouveau()
+    bd.rattacher_appareil(appareil, personne.uuid)
+    identite.poser(reponse, request.headers, appareil)
+    return reponse
+
+
+def _ecran_questionnaire(request: Request, personne):
     return gabarits.TemplateResponse(
         "questionnaire.html",
         {
             "request": request,
-            "prenom": prenom.strip()[:40],
-            "nom": nom.strip()[:40],
-            "genre": genre if genre in ("masculin", "feminin") else "",
+            "personne_uuid": personne.uuid,
+            "prenom": personne.prenom,
+            "nom": personne.nom,
+            "genre": personne.genre or "",
             "questions": CONFIG["obligatoires"],
             "action": "/valider",
             "titre": "Six questions",
@@ -450,31 +505,86 @@ def questionnaire(request: Request, prenom: str = Form(...), nom: str = Form(...
     )
 
 
+@app.post("/identite", response_class=HTMLResponse)
+async def valider_identite(request: Request):
+    donnees = dict(await request.form())
+    intention = _intention(donnees.get("intention"))
+    prenom = (donnees.get("prenom") or "").strip()[:40]
+    nom = (donnees.get("nom") or "").strip()[:40]
+    genre = donnees.get("genre") if donnees.get("genre") in ("masculin",
+                                                             "feminin") else None
+    if not prenom or not nom:
+        return RedirectResponse(f"/identite?intention={intention}",
+                                status_code=303)
+
+    resolution = bd.resoudre(prenom, nom)
+
+    # EX-AUTH-05 — plusieurs personnes portent ce nom. On demande, on ne
+    # devine pas : deviner donnerait à quelqu'un le personnage d'un autre.
+    if resolution.ambigue:
+        return gabarits.TemplateResponse(
+            "identite_choix.html",
+            {"request": request, "prenom": prenom, "nom": nom,
+             "candidates": resolution.candidates, "intention": intention})
+
+    if resolution.unique is not None:
+        return _suite_pour(request, resolution.unique, intention, genre)
+
+    if intention == "revoir":
+        return gabarits.TemplateResponse(
+            "identite.html",
+            {"request": request, "intention": "revoir", "prenom": prenom,
+             "nom": nom,
+             "erreur": "Aucun personnage n'a été écrit sous ce nom. "
+                       "Vérifiez l'orthographe, ou revenez à l'écran d'entrée "
+                       "pour en créer un."},
+            status_code=404)
+
+    # EX-AUTH-19 — la saisie libre, pour qui n'est pas dans la liste.
+    personne_uuid = bd.creer_personne_libre(prenom, nom, genre=genre)
+    return _suite_pour(request, bd.personne(personne_uuid), "creer", genre)
+
+
+@app.post("/identite/choisir", response_class=HTMLResponse)
+async def choisir_identite(request: Request):
+    donnees = dict(await request.form())
+    personne = bd.personne((donnees.get("personne_uuid") or "").strip())
+    if personne is None:
+        return RedirectResponse("/identite?intention=creer", status_code=303)
+    return _suite_pour(request, personne, _intention(donnees.get("intention")))
+
+
 @app.post("/valider")
 async def valider(request: Request):
     donnees = dict(await request.form())
-    prenom = (donnees.get("prenom") or "").strip()[:40]
-    nom = (donnees.get("nom") or "").strip()[:40]
-    if not prenom or not nom:
-        return RedirectResponse("/", status_code=303)
-    genre = (donnees.get("genre") or "").strip()
-    genre = genre if genre in ("masculin", "feminin") else None
-    reponses = _reponses_du_formulaire(donnees, "obligatoires")
+    # L'identité vient du champ posé par l'écran d'identité, jamais d'un
+    # (prénom, nom) reposté : deux homonymes se distinguent par leur uuid, et
+    # une seconde résolution par le nom serait une seconde source de vérité.
+    personne = bd.personne((donnees.get("personne_uuid") or "").strip())
+    if personne is None:
+        return RedirectResponse("/identite?intention=creer", status_code=303)
 
-    # Le choix se fait avant la génération : celui qui veut en dire plus n'attend
-    # pas deux fois, et on ne lui demande pas de rouvrir un cadeau déjà ouvert.
-    # Deuxième barrage : le formulaire de /valider peut être posté sans passer
-    # par /questionnaire. Sans lui, la porte dérobée resterait ouverte.
-    deja = bd.chronique_de(prenom, nom)
+    reponses = _reponses_du_formulaire(donnees, "obligatoires")
+    appareil = identite.du_requete(request)
+
+    # Deuxième barrage : /valider peut être posté sans passer par l'écran
+    # d'identité. Sans lui, la porte dérobée vers une seconde chronique
+    # resterait ouverte (EX-IA-26).
+    deja = bd.chronique_de_personne(personne.uuid)
     if deja:
         return RedirectResponse(f"/portrait/{deja}", status_code=303)
 
+    # Le choix se fait avant la génération : celui qui veut en dire plus
+    # n'attend pas deux fois, et on ne lui demande pas de rouvrir un cadeau
+    # déjà ouvert.
     if donnees.get("suite") == "bonus":
-        identifiant = bd.creer(prenom, nom, reponses, CODES_LIEUX,
-                               etat="brouillon", genre=genre)
-        return RedirectResponse(f"/bonus/{identifiant}/questions", status_code=303)
+        identifiant = bd.creer(personne.uuid, reponses, CODES_LIEUX,
+                               etat="brouillon", appareil_uuid=appareil)
+        return RedirectResponse(f"/bonus/{identifiant}/questions",
+                                status_code=303)
 
-    identifiant = bd.creer(prenom, nom, reponses, CODES_LIEUX, genre=genre)
+    identifiant = bd.creer(personne.uuid, reponses, CODES_LIEUX,
+                           appareil_uuid=appareil)
     _lancer_generation(identifiant)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
 

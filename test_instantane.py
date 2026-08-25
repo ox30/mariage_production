@@ -28,11 +28,12 @@ import config
 import depot_objet
 import instantane
 import main
+import test_outils
 from modeles import Sauvegarde
 
 bd.initialiser()
 for i in range(25):
-    bd.creer(f"Instant{i}", "Essai", {"metier": "x" * 400}, main.CODES_LIEUX)
+    test_outils.creer_chronique(f"Instant{i}", "Essai", {"metier": "x" * 400}, main.CODES_LIEUX)
 
 
 class DepotMuet(depot_objet.DepotObjet):
@@ -332,7 +333,7 @@ with bd.Seance() as s:
 assert lignes == 1, f"{lignes} lignes de sauvegarde pour un seul dépôt"
 
 # Une vraie modification relance le dépôt, immédiatement.
-bd.creer("Changement", "Reel", {"metier": "nouveau"}, main.CODES_LIEUX)
+test_outils.creer_chronique("Changement", "Reel", {"metier": "nouveau"}, main.CODES_LIEUX)
 assert instantane.un_passage(), "un changement de contenu doit repartir"
 assert len(compteur.recus) == 2
 assert instantane.un_passage() == [], "et le passage suivant se tait de nouveau"
@@ -367,7 +368,7 @@ assert instantane.un_passage() == [], "l'empreinte mémorisée doit tenir"
 # doit repartir au passage suivant.
 casse2 = DepotMuet("casse2", ecriture_ko=True)
 depot_objet.depots_actifs = lambda: [casse2]
-bd.creer("Apres", "Echec", {"metier": "z"}, main.CODES_LIEUX)
+test_outils.creer_chronique("Apres", "Echec", {"metier": "z"}, main.CODES_LIEUX)
 instantane.un_passage()
 depot_objet.depots_actifs = lambda: [compteur]
 assert instantane.un_passage(), \

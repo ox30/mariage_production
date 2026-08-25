@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Le Livre des Convoqués</p>
+  <h1>{% if intention == "revoir" %}Retrouver son personnage{% else %}Qui êtes-vous&nbsp;?{% endif %}</h1>
+
+  {% if intention == "revoir" %}
+    <p>Votre prénom et votre nom, comme vous les avez donnés.</p>
+  {% else %}
+    <p class="discret">Votre nom ne sera jamais écrit dans le texte.</p>
+  {% endif %}
+
+  {% if erreur %}<p class="erreur">{{ erreur }}</p>{% endif %}
+
+  <form method="post" action="/identite">
+    <input type="hidden" name="intention" value="{{ intention }}">
+    <p><input type="text" name="prenom" placeholder="Prénom" maxlength="40" required
+              autocomplete="given-name" value="{{ prenom or '' }}"></p>
+    <p><input type="text" name="nom" placeholder="Nom" maxlength="40" required
+              autocomplete="family-name" value="{{ nom or '' }}"></p>
+
+    {# EX-IA-36 — la question de genre n'est posée QU'ICI, et seulement à la
+       création en saisie libre. Jamais dans le questionnaire : ce n'est pas
+       une chose qu'on fait déclarer à quelqu'un à 22 h sans nécessité. #}
+    {% if intention != "revoir" %}
+      <input type="hidden" name="genre" id="champ-genre" value="">
+      <p class="exemple" style="margin:1.2rem 0 0.6rem">Le personnage sera écrit…</p>
+      <button type="button" class="choix genre" data-valeur="masculin">Au masculin</button>
+      <button type="button" class="choix genre" data-valeur="feminin">Au féminin</button>
+      <button type="button" class="choix genre" data-valeur="">Peu importe</button>
+    {% endif %}
+
+    <button class="action" type="submit">
+      {% if intention == "revoir" %}Retrouver{% else %}Commencer{% endif %}
+    </button>
+  </form>
+  <p class="discret" style="margin-top:1rem;text-align:center">
+    <a href="/">← Revenir</a>
+  </p>
+</div>
+{% if intention != "revoir" %}
+<script>
+document.querySelectorAll(".genre").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll(".genre").forEach(function (x) {
+      x.classList.remove("retenu");
+    });
+    b.classList.add("retenu");
+    document.getElementById("champ-genre").value = b.dataset.valeur;
+  });
+});
+</script>
+{% endif %}
+{% endblock %}

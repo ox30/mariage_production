@@ -119,6 +119,7 @@ except ia.ErreurDebit as exc:
 # Une date HTTP est acceptée au même titre qu'un nombre de secondes.
 from email.utils import format_datetime  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
+import test_outils
 
 futur = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30))
 appels = repondre(FausseReponse(429, {}, {"retry-after": futur}))
@@ -221,9 +222,9 @@ print("TOUT PASSE — invite et réponse brute consignées, échecs compris")
 # --------------------------------------------------------------------------- #
 # --- EX-IA-44 : la détection de doublon est dérivée -----------------------
 bd.initialiser()
-a = bd.creer("Doublon", "Premier", {"metier": "x"}, main.CODES_LIEUX)
-b = bd.creer("Doublon", "Second", {"metier": "x"}, main.CODES_LIEUX)
-c = bd.creer("Doublon", "Tiers", {"metier": "x"}, main.CODES_LIEUX)
+a = test_outils.creer_chronique("Doublon", "Premier", {"metier": "x"}, main.CODES_LIEUX)
+b = test_outils.creer_chronique("Doublon", "Second", {"metier": "x"}, main.CODES_LIEUX)
+c = test_outils.creer_chronique("Doublon", "Tiers", {"metier": "x"}, main.CODES_LIEUX)
 for identifiant, nom in ((a, "Borin Fendroc"), (b, "Borin Ferconte"),
                          (c, "Aldor Vaillegarde")):
     bd.enregistrer_portrait(identifiant, {**PORTRAIT_VALIDE, "nom_fictif": nom,

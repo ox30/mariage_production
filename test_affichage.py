@@ -9,7 +9,7 @@ import main, base_donnees as bd
 # La porte du mot de passe unique est franchie une fois ici (EX-AUTH-18).
 ctx = test_outils.client(main.app); c = ctx
 
-uid = bd.creer("Marie", "Dupont", {"metier": "infirmière", "attachement": "Ma famille"}, main.CODES_LIEUX)
+uid = test_outils.creer_chronique("Marie", "Dupont", {"metier": "infirmière", "attachement": "Ma famille"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid, {
     "nom_fictif": "Elwen la Guérisseuse", "peuple": "homme",
     "portrait": "Premier paragraphe.\n\nSecond paragraphe avec un < et une \" quote.",
@@ -51,7 +51,7 @@ assert ia.verifier_noms("il vit Pierre", ["Jean-Pierre"]) == ["Jean-Pierre"]
 print("TOUT PASSE — affichage du portrait et échappement")
 
 # --- Révélation : souvenir et vœu montrés tels quels -------------------------
-uid2 = bd.creer("Jo", "Test", {"souvenir": "on a raté le dernier train",
+uid2 = test_outils.creer_chronique("Jo", "Test", {"souvenir": "on a raté le dernier train",
                                "souhait": "plein de belles choses"},
                 main.CODES_LIEUX)
 bd.enregistrer_portrait(uid2, {"nom_fictif": "Thorald", "peuple": "nain",
@@ -63,7 +63,7 @@ assert "Ce qu'il ou elle vous souhaite" in r.text
 print("TOUT PASSE — révélation : souvenir et vœu tels quels")
 
 # --- Initiales affichées au palier d'indice ---------------------------------
-uid3 = bd.creer("jean-pierre", "gagnebin", {"souvenir": "s"}, main.CODES_LIEUX)
+uid3 = test_outils.creer_chronique("jean-pierre", "gagnebin", {"souvenir": "s"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid3, {"nom_fictif": "Skarn", "peuple": "orque",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 r = c.get("/deviner", headers=auth)
@@ -72,12 +72,12 @@ assert "Jean-Pierre Gagnebin" in r.text, "nom capitalisé à la révélation"
 print("TOUT PASSE — initiales au palier d'indice")
 
 # --- Le tableau apparie région et pendant d'ombre ---------------------------
-uid4 = bd.creer("Mons", "Tre", {"metier": "x", "allegeance": "L'Ombre",
+uid4 = test_outils.creer_chronique("Mons", "Tre", {"metier": "x", "allegeance": "L'Ombre",
                                 "monstre": "Un monstre, et j'assume"},
                 ["lieu_07"])   # EX-IA-42 : le code, jamais le libellé
 bd.enregistrer_portrait(uid4, {"nom_fictif": "Grokna", "peuple": "orque",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
-uid5 = bd.creer("Seig", "Neur", {"metier": "x", "allegeance": "L'Ombre",
+uid5 = test_outils.creer_chronique("Seig", "Neur", {"metier": "x", "allegeance": "L'Ombre",
                                  "monstre": "Un seigneur redouté, mais un seigneur"},
                 ["lieu_07"])   # EX-IA-42 : le code, jamais le libellé
 bd.enregistrer_portrait(uid5, {"nom_fictif": "Zahrun", "peuple": "Haradrim",
@@ -112,7 +112,7 @@ assert len(empreinte) == 12 and empreinte != "absent"
 base_s = {"metier": "Fauconnier", "attachement": "A", "defaut": "D", "objet": "O",
           "allegeance": "La Lumière", "souvenir_avec": "Les deux",
           "souvenir": "S", "souhait": "J"}
-uid_s = bd.creer("Style", "Sommaire", base_s, main.CODES_LIEUX)
+uid_s = test_outils.creer_chronique("Style", "Sommaire", base_s, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid_s, {"nom_fictif": "N", "peuple": "homme",
                                 "portrait": "p", "indice": "i", "fuites_noms": []})
 r = c.get(f"/portrait/{uid_s}/reprendre")

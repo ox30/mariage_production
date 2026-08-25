@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe" style="max-width:46rem">
+  <p class="surtitre">Administration</p>
+
+  {# Les onglets sont des LIENS et non du JavaScript : chaque écran a son
+     adresse, donc se recharge, se met en signet et se rouvre après une
+     coupure. À 21 h, sur un téléphone dont l'écran s'est verrouillé, un onglet
+     qui vit en mémoire est un onglet qu'on a perdu. #}
+  <nav class="onglets">
+    {% for chemin, titre in [("/admin/invites", "Invités"),
+                             ("/admin/tables", "Tables"),
+                             ("/admin/regions", "Régions")] %}
+      <a href="{{ chemin }}"
+         class="onglet{% if request.url.path.startswith(chemin) %} actif{% endif %}">{{ titre }}</a>
+    {% endfor %}
+  </nav>
+
+  {% block panneau %}{% endblock %}
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "admin_base.html" %}
+{% block panneau %}
+<h1>Les tables</h1>
+<p class="discret">
+  Le <strong>code</strong> est ce que porte la colonne <em>Table</em> de votre
+  fichier Excel&nbsp;: il ne change jamais, c'est par lui que l'import retrouve
+  la table. Le <strong>nom</strong> est ce que lisent les invités — modifiable
+  jusqu'au dernier moment.
+</p>
+
+{% if not tables %}
+  <p>Aucune table. Elles se créent au premier import.</p>
+{% else %}
+  <form method="post" action="/admin/tables">
+    <table class="grille">
+      <tr><th>Code</th><th>Nom affiché</th><th>Invités</th></tr>
+      {% for t in tables %}
+        <tr>
+          <td><code>{{ t.code }}</code></td>
+          <td><input type="text" name="nom_{{ t.uuid }}" value="{{ t.nom }}"
+                     maxlength="80" style="width:100%"></td>
+          <td class="discret">{{ t.effectif }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+    <button class="action" type="submit">Enregistrer les noms</button>
+  </form>
+{% endif %}
+
+{% if enregistre %}<p class="discret">{{ enregistre }} nom(s) enregistré(s).</p>{% endif %}
+{% endblock %}

@@ -119,6 +119,14 @@ async def cycle_de_vie(_: FastAPI):
     PANNE = None
     print(acces.resume(), flush=True)
     bd.initialiser()
+    # EX-ADM-22 — questions.yaml porte les valeurs par défaut, la base fait
+    # autorité ensuite. Le semis n'écrase JAMAIS un libellé déjà modifié :
+    # sans cela, chaque redémarrage effacerait le travail de la soirée.
+    semees = bd.semer_regions(CONFIG["lieux"])
+    print(f"régions         : {len(bd.regions())} en base"
+          + (f", dont {semees} semée(s) depuis questions.yaml" if semees
+             else " — libellés modifiables dans /admin/regions (EX-ADM-22)"),
+          flush=True)
     fils = taches.demarrer()
     # « 16 démarrés, limite 8 » se lisait comme une incohérence — trois
     # relectures pour comprendre que les fils au-delà de la limite dorment.
@@ -229,7 +237,16 @@ LIEUX_PAR_CODE = {l["code"]: l for l in CONFIG["lieux"]}
 
 
 def libelle_lieu(code: str) -> str:
-    """Le libellé d'affichage d'un code de région."""
+    """Le libellé d'affichage, tel qu'il est AUJOURD'HUI (EX-ADM-22).
+
+    Lu en base et non dans `questions.yaml` : le fichier est chargé au
+    démarrage, donc un renommage fait à 21 h n'y prendrait effet qu'au
+    redéploiement suivant — que l'on s'interdit ce soir-là (EX-SAU-09). Le
+    fichier reste le repli, pour la fenêtre entre la migration et le semis.
+    """
+    region = bd.regions().get(code)
+    if region:
+        return region["libelle"]
     lieu = LIEUX_PAR_CODE.get(code)
     return lieu["libelle"] if lieu else code
 
@@ -242,6 +259,9 @@ def locution_lieu(code: str) -> str:
     « convoqué en Les Havres Gris » sur l'écran que tous les invités voient
     pendant l'écriture de leur chronique.
     """
+    region = bd.regions().get(code)
+    if region and region["locution"]:
+        return region["locution"]
     lieu = LIEUX_PAR_CODE.get(code)
     if not lieu:
         return code
@@ -870,6 +890,58 @@ async def admin_invites_appliquer(request: Request, _: str = Depends(admin)):
         "admin_invites.html",
         _contexte_invites(request, plan=plan, applique=plan.recevable,
                           fichier=nom))
+
+
+# --------------------------------------------------------------------------- #
+# Tables et régions (EX-ADM-22)
+# --------------------------------------------------------------------------- #
+
+@app.get("/admin/tables", response_class=HTMLResponse)
+def admin_tables(request: Request, _: str = Depends(admin)):
+    return gabarits.TemplateResponse(
+        "admin_tables.html",
+        {"request": request, "tables": bd.tables(), "enregistre": 0})
+
+
+@app.post("/admin/tables", response_class=HTMLResponse)
+async def admin_tables_enregistrer(request: Request, _: str = Depends(admin)):
+    donnees = dict(await request.form())
+    enregistre = sum(
+        1 for cle, valeur in donnees.items()
+        if cle.startswith("nom_") and bd.renommer_table(cle[4:], valeur))
+    return gabarits.TemplateResponse(
+        "admin_tables.html",
+        {"request": request, "tables": bd.tables(), "enregistre": enregistre})
+
+
+@app.get("/admin/regions", response_class=HTMLResponse)
+def admin_regions(request: Request, _: str = Depends(admin)):
+    return gabarits.TemplateResponse(
+        "admin_regions.html",
+        {"request": request, "regions": _regions_ordonnees(), "enregistre": 0})
+
+
+def _regions_ordonnees() -> list[dict]:
+    return [dict(code=code, **valeurs) for code, valeurs
+            in sorted(bd.regions().items(), key=lambda p: p[1]["ordre"])]
+
+
+@app.post("/admin/regions", response_class=HTMLResponse)
+async def admin_regions_enregistrer(request: Request, _: str = Depends(admin)):
+    donnees = dict(await request.form())
+    enregistre = 0
+    for region in _regions_ordonnees():
+        code = region["code"]
+        if bd.modifier_region(
+                code,
+                donnees.get(f"libelle_{code}", region["libelle"]),
+                donnees.get(f"locution_{code}", region["locution"]),
+                donnees.get(f"ombre_{code}", region["ombre"])):
+            enregistre += 1
+    return gabarits.TemplateResponse(
+        "admin_regions.html",
+        {"request": request, "regions": _regions_ordonnees(),
+         "enregistre": enregistre})
 
 
 # Pages d'administration provisoires — reprises du banc d'essai.

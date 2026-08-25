@@ -99,10 +99,63 @@ class TableGroupe(_CleUUID, Base):
 
     __tablename__ = "table_groupe"
 
+    # EX-ADM-22 — le CODE est ce que porte le fichier Excel (« 3 ») et ce sur
+    # quoi l'import rapproche ; le NOM est ce que les invités lisent
+    # (« Fondcombe »), modifiable jusqu'au dernier moment.
+    #
+    # Sans cette séparation, renommer une table puis réimporter le fichier
+    # créait une SECONDE table portant l'ancien numéro et y déplaçait ses dix
+    # invités, en silence. Même principe que `chronique.lieu` : un code stable,
+    # un libellé qui n'est qu'un paramètre d'affichage.
+    code: Mapped[str] = mapped_column(String(40))
     nom: Mapped[str] = mapped_column(String(80))
     ordre: Mapped[int] = mapped_column(Integer, default=0)
     code_responsable: Mapped[str | None] = mapped_column(String(40))
     est_test: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    __table_args__ = (
+        Index("ux_table_groupe_code", "code", unique=True),
+    )
+
+
+class Region(Base):
+    """Les dix régions de la carte, telles qu'on les AFFICHE (EX-ADM-22).
+
+    **Pourquoi en base et non dans `questions.yaml`.** `EX-ADM-22` veut que les
+    libellés se modifient « y compris après ouverture de la soirée ».
+    `questions.yaml` est chargé au démarrage : une modification n'y prendrait
+    effet qu'au redéploiement suivant, ce qu'`EX-SAU-09` interdit le 5
+    septembre. Et le réécrire depuis une page web détruirait ses commentaires,
+    qui sont la référence éditoriale du projet.
+
+    `questions.yaml` porte donc les valeurs **par défaut**, semées ici au
+    premier démarrage ; cette table fait autorité ensuite. Une seule autorité à
+    l'exécution, une valeur initiale documentée — comme le nom du dossier de
+    projet.
+
+    **La clé primaire est le code**, pas un UUID : écart assumé à `EX-GEN-02`,
+    au même titre qu'`EtatSoiree`. `lieu_01` est déjà stable et unique par
+    construction (`EX-IA-42`), et c'est lui que portent les chroniques ; lui
+    superposer un UUID ajouterait une indirection sans rien garantir de plus.
+
+    Renommer une région n'orpheline aucune chronique : `chronique.lieu` stocke
+    le code, jamais le libellé (`EX-IA-28`, `EX-IA-42`).
+    """
+
+    __tablename__ = "region"
+
+    code: Mapped[str] = mapped_column(String(20), primary_key=True)
+    libelle: Mapped[str] = mapped_column(String(80))
+    # « en Comté », « à Fondcombe », « aux Havres Gris » — la préposition fait
+    # partie du libellé, sinon les gabarits en choisissent une au hasard.
+    locution: Mapped[str] = mapped_column(String(120))
+    # Le pendant d'ombre : où se tient celui qui a choisi l'Ombre, à la marge
+    # de la même région (EX-IA-11).
+    ombre: Mapped[str] = mapped_column(String(160))
+    ordre: Mapped[int] = mapped_column(Integer, default=0)
+    modifie_le: Mapped[datetime] = mapped_column(HorodatageUTC,
+                                                 default=maintenant,
+                                                 onupdate=maintenant)
 
 
 class Personne(_CleUUID, Base):

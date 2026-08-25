@@ -1,7 +1,5 @@
-{% extends "base.html" %}
-{% block corps %}
-<div class="enveloppe" style="max-width:44rem">
-  <p class="surtitre">Administration</p>
+{% extends "admin_base.html" %}
+{% block panneau %}
   <h1>Liste des invités</h1>
 
   <p class="discret">
@@ -122,5 +120,5 @@
     <code>exemples/invites-gabarit.xlsx</code>. Sept colonnes, dans l'ordre.
     Réimporter le même fichier ne duplique rien.
   </p>
-</div>
+
 {% endblock %}

@@ -22,6 +22,7 @@ import json
 import random
 import re
 import unicodedata
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -33,7 +34,8 @@ from sqlalchemy.orm import Session, sessionmaker
 import config
 import modeles
 import noms
-from modeles import Appareil, Chronique, Journal, Personne
+from modeles import (Appareil, Chronique, Journal, Personne, Region,
+                     TableGroupe)
 
 CHEMIN = str(config.projet().chemin_base)
 
@@ -340,6 +342,126 @@ def creer_personne_libre(prenom: str, nom: str,
                     details={"source": "saisie_libre"})
         seance.commit()
         return personne.uuid
+
+
+# --------------------------------------------------------------------------- #
+# Les régions telles qu'on les affiche (EX-ADM-22)
+# --------------------------------------------------------------------------- #
+
+# Relues à chaud, avec un cache court : `libelle_lieu` est appelé plusieurs fois
+# par page, et une requête par appel coûterait plus que la fraîcheur ne vaut.
+# Dix secondes, comme `config.parametre` — un renommage fait à 21 h est visible
+# avant qu'on ait fini de reposer le téléphone.
+_CACHE_REGIONS: tuple[float, dict] = (0.0, {})
+DELAI_CACHE_REGIONS_S = 10.0
+
+
+def semer_regions(lieux: list[dict]) -> int:
+    """Sème la table depuis `questions.yaml` — les codes absents seulement.
+
+    Idempotent, et **non destructif** : un libellé déjà modifié depuis
+    l'administration n'est jamais réécrit par le fichier. Sans cela, chaque
+    redémarrage effacerait le travail de la soirée.
+    """
+    ajoutees = 0
+    with Seance() as seance:
+        for rang, lieu in enumerate(lieux):
+            code = lieu["code"]
+            if seance.get(Region, code) is not None:
+                continue
+            seance.add(Region(
+                code=code,
+                libelle=lieu["libelle"],
+                locution=lieu.get("locution") or f"à {lieu['libelle']}",
+                ombre=lieu.get("ombre") or "",
+                ordre=rang,
+            ))
+            ajoutees += 1
+        if ajoutees:
+            seance.commit()
+    _vider_cache_regions()
+    return ajoutees
+
+
+def _vider_cache_regions() -> None:
+    global _CACHE_REGIONS
+    _CACHE_REGIONS = (0.0, {})
+
+
+def regions() -> dict[str, dict]:
+    """`{code: {libelle, locution, ombre}}`, tel qu'affiché aujourd'hui."""
+    global _CACHE_REGIONS
+    age, valeur = _CACHE_REGIONS
+    if valeur and time.monotonic() - age < DELAI_CACHE_REGIONS_S:
+        return valeur
+    with Seance() as seance:
+        lues = {
+            r.code: {"libelle": r.libelle, "locution": r.locution,
+                     "ombre": r.ombre, "ordre": r.ordre}
+            for r in seance.scalars(select(Region).order_by(Region.ordre))
+        }
+    _CACHE_REGIONS = (time.monotonic(), lues)
+    return lues
+
+
+def modifier_region(code: str, libelle: str, locution: str, ombre: str) -> bool:
+    """EX-ADM-22 — renommer en pleine soirée, sans toucher aux chroniques.
+
+    `chronique.lieu` porte le code : aucune chronique déjà produite ne devient
+    orpheline, et aucune ne change de région (EX-IA-28).
+    """
+    with Seance() as seance:
+        region = seance.get(Region, code)
+        if region is None:
+            return False
+        region.libelle = libelle.strip() or region.libelle
+        region.locution = locution.strip() or region.locution
+        region.ombre = ombre.strip()
+        journaliser(seance, "region_modifiee", objet_uuid=code,
+                    objet_type="region",
+                    details={"libelle": region.libelle,
+                             "locution": region.locution})
+        seance.commit()
+    _vider_cache_regions()
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# Les tables (EX-ADM-22, clin d'œil aux noms choisis par les mariés)
+# --------------------------------------------------------------------------- #
+
+def tables() -> list[dict]:
+    """Les tables avec leur effectif, dans l'ordre de leur code.
+
+    L'effectif se **compte**, il ne se stocke pas : une colonne de comptage se
+    désynchronise dès le premier import (EX-GEN-07).
+    """
+    with Seance() as seance:
+        lues = []
+        for table in seance.scalars(select(TableGroupe)):
+            effectif = seance.scalar(
+                select(func.count()).select_from(Personne)
+                .where(Personne.table_uuid == table.uuid,
+                       Personne.active.is_(True))) or 0
+            lues.append({"uuid": table.uuid, "code": table.code,
+                         "nom": table.nom, "effectif": effectif})
+    return sorted(lues, key=lambda t: (len(t["code"]), t["code"]))
+
+
+def renommer_table(uuid: str, nom: str) -> bool:
+    """Le CODE ne bouge jamais : c'est lui que porte le fichier Excel."""
+    nom = nom.strip()
+    if not nom:
+        return False
+    with Seance() as seance:
+        table = seance.get(TableGroupe, uuid)
+        if table is None:
+            return False
+        table.nom = nom
+        journaliser(seance, "table_renommee", objet_uuid=uuid,
+                    objet_type="table", details={"code": table.code, "nom": nom})
+        seance.commit()
+    return True
 
 
 def definir_genre(personne_uuid: str, genre: str) -> None:

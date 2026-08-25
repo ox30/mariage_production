@@ -355,20 +355,26 @@ def _differences(seance, ligne: Ligne, personne: Personne) -> list[str]:
                       else "plus responsable de table")
     if ligne.est_marie != personne.est_marie:
         champs.append("marié·e" if ligne.est_marie else "plus marié·e")
-    nom_table = _nom_de_table(seance, personne.table_uuid)
-    if normaliser(nom_table) != normaliser(ligne.table):
+    code_table = _code_de_table(seance, personne.table_uuid)
+    if normaliser(code_table) != normaliser(ligne.table):
         # EX-ADM-14 — la table change sans jamais créer une seconde personne.
-        champs.append(f"table : {nom_table or '—'} → {ligne.table or '—'}")
+        champs.append(f"table : {code_table or '—'} → {ligne.table or '—'}")
     if not personne.active:
         champs.append("réactivée")
     return champs
 
 
-def _nom_de_table(seance, table_uuid: str | None) -> str:
+def _code_de_table(seance, table_uuid: str | None) -> str:
+    """Le CODE, parce que c'est lui que le fichier porte.
+
+    Comparer le nom affiché ferait apparaître un changement de table à chaque
+    simulation dès qu'une table est renommée : « table 3 → 3 », alors que rien
+    n'a bougé.
+    """
     if not table_uuid:
         return ""
     table = seance.get(TableGroupe, table_uuid)
-    return table.nom if table else ""
+    return table.code if table else ""
 
 
 def appliquer(chemin, liste_complete: bool = False) -> Plan:
@@ -383,17 +389,25 @@ def appliquer(chemin, liste_complete: bool = False) -> Plan:
         return plan
 
     with Seance() as seance:
-        tables = {normaliser(t.nom): t for t in seance.scalars(select(TableGroupe))}
+        # Rapprochées par leur CODE et non par leur nom. La colonne « Table »
+        # du fichier porte « 3 » ; le nom affiché peut être devenu
+        # « Fondcombe ». Chercher par nom aurait créé une seconde table « 3 »
+        # au premier réimport, et y aurait déplacé ses dix invités en silence.
+        tables = {normaliser(t.code): t
+                  for t in seance.scalars(select(TableGroupe))}
 
-        def table_pour(nom: str) -> str | None:
-            if not nom.strip():
+        def table_pour(code: str) -> str | None:
+            if not code.strip():
                 return None
-            existante = tables.get(normaliser(nom))
+            existante = tables.get(normaliser(code))
             if existante is None:
-                existante = TableGroupe(nom=nom.strip(), ordre=len(tables))
+                # Une table neuve prend son code comme nom : elle est
+                # renommable ensuite dans /admin/tables.
+                existante = TableGroupe(code=code.strip(), nom=code.strip(),
+                                        ordre=len(tables))
                 seance.add(existante)
                 seance.flush()
-                tables[normaliser(nom)] = existante
+                tables[normaliser(code)] = existante
             return existante.uuid
 
         vivantes = list(seance.scalars(select(Personne)))

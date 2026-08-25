@@ -226,6 +226,7 @@ un nom non.
 | `test_acces.py` | porte fermée par défaut, cookie, en-têtes, refus au démarrage |
 | `test_identite.py` | deux portes, cookie d'appareil, homonymes, reconduction |
 | `test_import.py` | simulation, idempotence, rejet sur conflit, inactivation |
+| `test_admin.py` | tables et régions modifiables, onglets, semis non destructif |
 
 `test_outils.py` n'est pas un test : il porte `client()`, qui ouvre le cycle de vie et franchit la porte — **après avoir vérifié qu'elle était fermée**. Sans ce contrôle, le jour où la porte ne fermerait plus rien, toute la suite continuerait de passer.
 
@@ -303,6 +304,48 @@ cookies rendrait trois générations neuves.
 **L'attribution est figée à la création** (`EX-AUTH-06`). Deux personnes
 peuvent se succéder sur le même téléphone : le rattachement suit la dernière,
 mais les chroniques déjà écrites gardent l'appareil de leur naissance.
+
+## Ce qui s'affiche se modifie, ce qui identifie ne bouge jamais
+
+Deux couples, même principe, tous deux posés par la migration `0002` :
+
+| Identifie | S'affiche |
+|---|---|
+| `chronique.lieu` = `lieu_02` | `region.libelle` = « Fondcombe », `region.locution` = « à Fondcombe » |
+| `table_groupe.code` = « 3 » | `table_groupe.nom` = « Andúril » |
+
+*Le défaut payé :* l'import rapprochait les tables par leur **nom**. Renommer
+la table « 3 » en « Fondcombe » puis réimporter le fichier — qui porte toujours
+`Table = 3` — créait une **seconde** table « 3 » et y déplaçait ses dix
+invités, en silence. Le code est ce que porte le fichier, le nom est ce que
+lisent les invités.
+
+**Les régions vivent en base, pas dans `questions.yaml`.** `EX-ADM-22` veut la
+modification « y compris après ouverture de la soirée » ; le fichier est chargé
+au démarrage, donc un renommage à 21 h n'y prendrait effet qu'au redéploiement
+suivant, que `EX-SAU-09` interdit ce soir-là. Et le réécrire depuis une page
+web détruirait ses commentaires, qui sont la référence éditoriale du projet.
+Le fichier porte les **valeurs par défaut**, semées au démarrage ; la base fait
+autorité ensuite. **Le semis n'écrase jamais** : sans cela, chaque redémarrage
+effacerait le travail de la soirée.
+
+**La coïncidence entre noms de tables et noms de régions est voulue** —
+`EX-ADM-22` : *« ils sont destinés à reprendre les noms de tables choisis par
+les mariés, en clin d'œil »*. Là où l'on est assis et là où l'on est convoqué
+n'ont aucune raison de coïncider, et l'écran d'attente le dit : « Le Conseil
+vous convoquera à Fondcombe. **Pas ce soir** : ce soir vous êtes assis parmi
+nous. » Aucun contrôle n'interdit donc de nommer une table du nom d'une région.
+
+**La locution porte sa préposition** — « en Comté », « aux Havres Gris » — parce
+qu'elle s'écrit dans une phrase. Les gabarits écrivaient « en » en dur, ce qui
+donnait « convoqué en Les Havres Gris » sur l'écran que tous les invités
+voient. Le futur (« convoquera ») évite au passage l'accord que le passé
+composé imposait.
+
+**Les onglets d'administration sont des liens**, pas du JavaScript : chaque
+écran a son adresse, donc se recharge et se rouvre après une coupure. Un onglet
+qui vit en mémoire est un onglet perdu dès que l'écran du téléphone se
+verrouille.
 
 ## L'import des invités
 

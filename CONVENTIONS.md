@@ -349,6 +349,19 @@ des codes hexadécimaux inventés sur place, qui n'appartenaient à aucune
 palette. `test_affichage.py` refuse désormais tout `style="…color…"` dans un
 gabarit.
 
+**Un lien qui est un bouton n'est pas un lien.** `a:link` pèse plus lourd que
+`.action` — un élément plus une pseudo-classe contre une simple classe — donc
+la règle générale des liens écrasait la couleur du bouton : texte laiton sur
+fond laiton. Seul `a:hover` le rattrapait, ce qui ne se voit qu'à la souris ;
+au doigt, sur téléphone, le bouton était vide. Toute classe portée par un `<a>`
+et qui pose un fond doit avoir ses règles `a.classe:link` **et**
+`a.classe:visited`, et `test_affichage.py` le déduit des gabarits : un futur
+`<a class="bouton-neuf">` sera signalé sans qu'on y pense.
+
+**Le survol ne répare jamais rien.** Sur téléphone il n'existe pas, et un état
+qui n'existe pas ne peut pas rendre lisible ce qui ne l'est pas. Il ne change
+que la teinte.
+
 **Les liens sont stylés explicitement, `:visited` compris.** Sans règle `a
 { color }`, tout lien hors bouton prend le bleu du navigateur, et le violet dès
 qu'il a été suivi une fois — illisibles sur fond nocturne. Le laiton est la
@@ -477,6 +490,13 @@ incidents.
 assertion cherchant « n'a » dans une réponse échoue sur `n&#39;a` — et la faute
 ne se voit que sur les messages *dynamiques*, ce qui la rend d'autant plus
 déroutante. `test_identite.texte()` déséchappe avant de comparer.
+
+**Deux règles de même spécificité se départagent par leur ordre dans le
+fichier.** `a.action` et `a:visited` pèsent pareil : une classe et une
+pseudo-classe comptent dans la même colonne. Le bouton était donc correct par
+l'endroit où la règle avait été collée, pas par sa spécificité — et la mutation
+qui retirait `a.action:visited` ne cassait rien. Dépendre de l'ordre, c'est
+dépendre de l'endroit où quelqu'un posera la prochaine règle.
 
 **Une mutation qui ne fait rien tomber n'accuse pas toujours le test.** Retirer
 le contrôle de chronique existante dans `main.py` n'a rien cassé : `bd.creer()`

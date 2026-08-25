@@ -33,6 +33,23 @@ a:hover, a:focus { color: var(--brume); }
 .discret a, .discret a:link, .discret a:visited { color: var(--brume); }
 .discret a:hover, .discret a:focus { color: var(--laiton); }
 
+/* UN LIEN QUI EST UN BOUTON N'EST PAS UN LIEN.
+   `a:link` pèse plus lourd que `.action` dans le calcul de spécificité — un
+   élément plus une pseudo-classe contre une simple classe. La règle ci-dessus
+   écrasait donc la couleur du bouton : texte laiton sur fond laiton, illisible.
+   Seul `a:hover` le rattrapait, ce qui ne se voit qu'à la souris : au doigt,
+   sur téléphone, le bouton restait vide. Ces sélecteurs pèsent plus lourd que
+   `a:link` et rendent la lisibilité indépendante du survol. */
+a.action, a.action:link, a.action:visited { color: #16110a; text-decoration: none; }
+a.action.sobre, a.action.sobre:link, a.action.sobre:visited { color: var(--brume); }
+a.choix, a.choix:link, a.choix:visited { color: var(--brume); text-decoration: none; }
+a.retour, a.retour:link, a.retour:visited { color: var(--brume-faible); }
+/* Le survol ne change que la teinte, jamais la lisibilité : sur téléphone il
+   n'existe pas, et un état qui n'existe pas ne peut rien réparer. */
+a.action:hover, a.action:focus { color: #16110a; }
+a.action.sobre:hover, a.action.sobre:focus,
+a.choix:hover, a.choix:focus { color: var(--brume); }
+
 html, body {
   margin: 0;
   padding: 0;

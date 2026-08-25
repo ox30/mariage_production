@@ -197,4 +197,44 @@ for _gabarit in sorted((_racine / "templates").glob("*.html")):
             f"{_gabarit.name} fixe une couleur en dur : « {_regle} ». Les "
             "couleurs vivent dans style.css, où elles se corrigent une fois "
             "pour tous les écrans.")
+# --- Un lien qui est un bouton reste lisible SANS survol -----------------
+# `a:link` pèse plus lourd que `.action` — un élément plus une pseudo-classe
+# contre une simple classe. La règle générale des liens écrasait donc la
+# couleur du bouton : texte laiton sur fond laiton. Seul `a:hover` le
+# rattrapait, ce qui ne se voit qu'à la souris ; au doigt, sur téléphone, le
+# bouton était vide. Constaté le 25 août sur « Créer mon personnage ».
+#
+# Le contrôle se DÉDUIT des gabarits : toute classe portée par un `<a>` et qui
+# pose un fond dans la feuille de style doit avoir sa règle `a.classe:link`.
+# Un futur `<a class="bouton-neuf">` sera donc signalé sans qu'on y pense.
+_classes_de_lien = set()
+for _gabarit in sorted((_racine / "templates").glob("*.html")):
+    for _attribut in _re.findall(r'<a\b[^>]*\bclass="([^"]+)"',
+                                 _gabarit.read_text(encoding="utf-8")):
+        _classes_de_lien.update(_attribut.split())
+
+for _classe in sorted(_classes_de_lien):
+    _bloc = _re.search(rf"^\.{_re.escape(_classe)}\b[^{{]*{{([^}}]*)}}",
+                       _style, _re.M)
+    if not _bloc or "background" not in _bloc.group(1):
+        continue  # pas un bouton : une classe sans fond n'a rien à écraser
+    for _etat in (":link", ":visited"):
+        assert f"a.{_classe}{_etat}" in _style, (
+            f"« {_classe} » pose un fond et sert de lien, mais aucune règle "
+            f"`a.{_classe}{_etat}` ne fixe sa couleur de texte. Le bouton sera "
+            "illisible tant que la souris n'est pas dessus — donc toujours, "
+            "sur téléphone.")
+    # `:visited` est exigé bien que `a.action` seul suffise aujourd'hui :
+    # `a.action` et `a:visited` ont la MÊME spécificité — une classe et une
+    # pseudo-classe pèsent pareil — et c'est l'ordre dans le fichier qui
+    # tranche. Dépendre de l'ordre, c'est dépendre de l'endroit où quelqu'un
+    # collera la prochaine règle.
+
+# Et la lisibilité ne doit dépendre d'aucun survol : sur téléphone il n'existe
+# pas, et un état qui n'existe pas ne peut rien réparer.
+_survol = _re.search(r"^a\.action:hover[^{]*{([^}]*)}", _style, _re.M)
+assert _survol and "#16110a" in _survol.group(1), \
+    "le survol doit conserver la couleur du bouton, jamais la corriger"
+print("TOUT PASSE — un lien qui est un bouton reste lisible sans survol")
+
 print("TOUT PASSE — les liens et les couleurs restent dans la palette du projet")

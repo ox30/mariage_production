@@ -37,8 +37,9 @@ projet:
 # projet — c'est ce qui a envoyé les sauvegardes sous un préfixe orphelin le
 # 25 août. Laisser passer la valeur d'exemple ouvrirait la soirée à tous.
 acces:
-  mot_de_passe: "a-definir"
-  mot_de_passe_maries: "a-definir"      # QR code dédié (EX-AUTH-20)
+  mot_de_passe: "a-definir"        →   mot_de_passe: "mithril"
+  mot_de_passe_maries: "a-definir"     (celui-ci peut attendre, il n'est pas
+                                        encore contrôlé — EX-AUTH-20 vient plus tard)
 
 # Les quotas sont des ALLOCATIONS. Aucun compteur de consommation n'est stocké :
 # les consommations se calculent depuis le journal (EX-GEN-07, EX-IA-21).

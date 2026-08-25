@@ -3,14 +3,21 @@
   <h1>Il reste {{ nb_bonus_mot }} questions</h1>
   <p>Vos sept premières réponses sont enregistrées. Votre chronique s'écrira dès
      que vous aurez terminé — ou tout de suite, si vous préférez.</p>
+  <p class="discret">Le Conseil vous convoquera {{ locution_lieu(p.lieu) }}.</p>
   <a class="action" href="/bonus/{{ p.uuid }}/questions">Continuer</a>
 
 {% elif p.etat in ("en_attente", "en_cours") %}
   <div hx-get="/portrait/{{ p.uuid }}/etat" hx-trigger="every 2s" hx-target="#zone-portrait">
     <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
-    <h1>On vous attendait ici</h1>
-    <p>Le Conseil vous a convoqué en <strong>{{ libelle_lieu(p.lieu) }}</strong>. L'ennemi est
-       proche, et l'on manque de bras.</p>
+    {# Le lieu de la CONVOCATION n'est pas la table où l'on est assis, et les
+       deux peuvent porter le même nom sans que ce soit une erreur. Le futur
+       le dit — « vous convoquera », pas « vous a convoqué » — et il évite au
+       passage l'accord que le passé composé imposait : « convoqué » se lisait
+       faux pour une invitée sur deux. #}
+    <h1>On vous attend ailleurs</h1>
+    <p>Le Conseil vous convoquera <strong>{{ locution_lieu(p.lieu) }}</strong>. Pas ce soir :
+       ce soir vous êtes assis parmi nous. Mais l'ennemi est proche, et l'on
+       manque de bras — faites vos bagages.</p>
     <div class="attente">
       <p>Votre chronique s'écrit<span class="points"></span></p>
       {# EX-IA-25 — position et ordre de grandeur, jamais un renvoi : quelqu'un

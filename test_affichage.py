@@ -131,3 +131,44 @@ assert '<summary class="action sobre">' in r.text, \
     "le résumé du pli doit être une cible pleine largeur (EX-CYC-04 : une main)"
 assert 'class="compte"' in r.text, "le coût figure sous le libellé, dans la zone de frappe"
 print("TOUT PASSE — style versionné, sommaire cohérent, pli tactile")
+
+# --- La convocation emploie la locution, pas « en » en dur -----------------
+# Le gabarit écrivait « convoqué en {libellé} », ce qui donnait « en Les Havres
+# Gris » et « en Les Mines de la Moria » sur l'écran que TOUS les invités
+# voient pendant l'écriture de leur chronique. La locution juste vivait dans
+# questions.yaml depuis l'étape 1, branchée sur le seul prompt.
+import html as _html
+
+for code, lieu in main.LIEUX_PAR_CODE.items():
+    locution = main.locution_lieu(code)
+    assert locution == lieu["locution"], (code, locution)
+    # Une locution est une préposition SUIVIE du nom : sans préposition, la
+    # phrase se relit « convoquera Les Havres Gris ».
+    assert locution.split()[0] in ("à", "en", "dans", "aux", "au", "chez"), \
+        f"{code} : « {locution} » ne commence pas par une préposition"
+
+# Un code inconnu ne casse pas la page : questions.yaml peut gagner une région
+# le 4 septembre sans que quiconque pense à sa locution.
+assert main.locution_lieu("lieu_99") == "lieu_99"
+
+# Et l'écran d'attente porte bien la phrase, au futur et sans accord.
+uid_conv = test_outils.creer_chronique("Convo", "Cation", {"metier": "x"},
+                                       main.CODES_LIEUX)
+page = _html.unescape(c.get(f"/portrait/{uid_conv}").text)
+attendue = main.locution_lieu(bd.lire(uid_conv).lieu)
+assert f"convoquera <strong>{attendue}</strong>" in page, page[:600]
+assert "vous a convoqué" not in page, \
+    "le passé composé impose un accord : « convoqué » se lit faux une fois sur deux"
+# La dissociation table / convocation est dite explicitement : sans elle,
+# l'invité assis à une table du même nom croit à une erreur.
+assert "Pas ce soir" in page, page[:600]
+# L'écran « brouillon » porte la même phrase, et n'était pas éprouvé : la
+# mutation qui remettait le passé composé le frappait sans faire tomber quoi
+# que ce soit. Deux endroits disent la même chose, les deux se vérifient.
+uid_br = test_outils.creer_chronique("Brouil", "Lon", {"metier": "x"},
+                                     main.CODES_LIEUX, etat="brouillon")
+page_br = _html.unescape(c.get(f"/portrait/{uid_br}").text)
+attendue_br = main.locution_lieu(bd.lire(uid_br).lieu)
+assert f"convoquera {attendue_br}" in page_br, page_br[:600]
+assert "convoqué" not in page_br, "le passé composé impose un accord"
+print("TOUT PASSE — la convocation emploie la locution juste, au futur")

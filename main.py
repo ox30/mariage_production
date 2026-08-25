@@ -234,7 +234,25 @@ def libelle_lieu(code: str) -> str:
     return lieu["libelle"] if lieu else code
 
 
+def locution_lieu(code: str) -> str:
+    """« en Comté », « à Fondcombe », « aux Havres Gris » — la préposition juste.
+
+    Elle vit dans `questions.yaml` depuis l'étape 1, mais n'était branchée que
+    sur le prompt : les gabarits écrivaient « en » en dur, ce qui donnait
+    « convoqué en Les Havres Gris » sur l'écran que tous les invités voient
+    pendant l'écriture de leur chronique.
+    """
+    lieu = LIEUX_PAR_CODE.get(code)
+    if not lieu:
+        return code
+    # Repli sur « à » plutôt que sur rien : un libellé ajouté à la main dans
+    # questions.yaml le 4 septembre sans sa locution doit encore produire une
+    # phrase lisible.
+    return lieu.get("locution") or f"à {lieu['libelle']}"
+
+
 gabarits.env.globals["libelle_lieu"] = libelle_lieu
+gabarits.env.globals["locution_lieu"] = locution_lieu
 
 # Sans marqueur de version, un navigateur qui a déjà chargé la feuille de style
 # la réutilise : une correction d'affichage faite à 22 h resterait invisible

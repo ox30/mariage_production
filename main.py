@@ -1153,3 +1153,14 @@ def export(test: str = "", _: str = Depends(admin)):
         },
         headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
     )
+
+
+# --- Morceau A, JETABLE — à retirer avec `mesure_photo.py` et `mesure.html` ---
+# Éteint par défaut : sans `MESURE_PHOTO=1`, la route n'est même pas déclarée.
+# Un fichier oublié dans le dépôt ne sert alors rien (EX-SEC-04).
+import mesure_photo  # noqa: E402
+
+if mesure_photo.actif():
+    app.include_router(mesure_photo.routeur)
+    print("mesure photo   : /mesure ACTIVE — page jetable, à retirer après relevé",
+          flush=True)

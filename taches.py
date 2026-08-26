@@ -101,16 +101,28 @@ class TacheReclamee:
 # --------------------------------------------------------------------------- #
 
 _traitants: dict[str, Callable[[str], None]] = {}
+_sur_echec: dict[str, Callable[[str, str], None]] = {}
 
 
-def enregistrer_traitant(type_tache: str, fonction: Callable[[str], None]) -> None:
+def enregistrer_traitant(type_tache: str, fonction: Callable[[str], None],
+                         sur_echec: Callable[[str, str], None] | None = None) -> None:
     """Associe un type de tâche à la fonction qui l'exécute.
 
     L'inversion est délibérée : `taches` ne connaît ni `ia`, ni les gabarits,
     ni le contenu de `questions.yaml`. C'est `main` qui déclare ce qu'il sait
     faire, ce qui évite un import circulaire et garde la file générique.
+
+    `sur_echec` est appelé quand la tâche échoue **définitivement**, pour que
+    l'objet qu'elle servait sache qu'il ne sera pas servi. *Défaut constaté en
+    production le 26 août : aucun traitant n'existait pour `conversion_image`,
+    la tâche échouait aussitôt, et la photo restait « en traitement » à vie —
+    l'écran de l'invité affirmait qu'on préparait sa photo alors que personne
+    ne préparait rien.* Un état terminal qui ne remonte pas à l'objet est un
+    mensonge que rien ne vient corriger.
     """
     _traitants[type_tache] = fonction
+    if sur_echec is not None:
+        _sur_echec[type_tache] = sur_echec
 
 
 # --------------------------------------------------------------------------- #
@@ -244,6 +256,12 @@ def differer(uuid_tache: str, erreur: str, secondes: float) -> None:
 
 
 def echouer(uuid_tache: str, erreur: str) -> None:
+    """L'échec définitif, et le seul endroit par où il passe.
+
+    Y compris « aucun traitant » : c'est justement le cas qui a laissé une
+    photo en traitement pour toujours.
+    """
+    avertir = None
     with bd.Seance() as seance:
         tache = seance.get(Tache, uuid_tache)
         if tache is not None:
@@ -251,6 +269,16 @@ def echouer(uuid_tache: str, erreur: str) -> None:
             tache.derniere_erreur = erreur[:500]
             tache.terminee_le = config.maintenant()
             seance.commit()
+            avertir = (_sur_echec.get(tache.type), tache.objet_uuid)
+    if avertir and avertir[0] is not None:
+        try:
+            avertir[0](avertir[1], erreur)
+        except Exception as exc:      # noqa: BLE001
+            # Le crochet ne doit jamais empêcher la tâche d'être marquée
+            # échouée : elle l'est déjà, et une exception ici la ferait
+            # paraître encore en cours.
+            print(f"crochet d'échec en défaut pour {avertir[1]} : "
+                  f"{type(exc).__name__} — {exc}", flush=True)
 
 
 def reprendre_interrompues() -> int:

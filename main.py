@@ -142,6 +142,14 @@ async def cycle_de_vie(_: FastAPI):
           + (f", dont {semees} semée(s) depuis questions.yaml" if semees
              else " — libellés modifiables dans /admin/regions (EX-ADM-22)"),
           flush=True)
+    # Une photo restée « en traitement » sans tâche vivante n'avancera jamais
+    # seule, et l'écran de l'invité continuera d'affirmer qu'on la prépare.
+    # Couvre le redémarrage en plein travail — et les photos déposées avant que
+    # le traitant n'existe (26 août).
+    reprises = photos.reprendre_conversions_perdues()
+    if reprises:
+        print(f"photos          : {reprises} conversion(s) perdue(s) remise(s) "
+              "en file", flush=True)
     fils = taches.demarrer()
     # « 16 démarrés, limite 8 » se lisait comme une incohérence — trois
     # relectures pour comprendre que les fils au-delà de la limite dorment.
@@ -418,6 +426,11 @@ def _generer_chronique(identifiant: str) -> None:
 
 
 taches.enregistrer_traitant("generation_chronique", _generer_chronique)
+# Le crochet d'échec est ce qui recoud l'état terminal de la tâche à l'objet
+# qu'elle servait. Sans lui, une photo dont la conversion échoue reste « en
+# préparation » pour toujours — et le crédit n'est jamais rendu (EX-PHO-33).
+taches.enregistrer_traitant("conversion_image", photos.convertir,
+                            sur_echec=photos.marquer_echec)
 
 
 def _lancer_generation(identifiant: str, motif: str | None = None) -> None:

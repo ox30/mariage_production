@@ -22,3 +22,12 @@ boto3==1.43.79
 # dessein : openpyxl ne sert qu'à lire sept colonnes de texte, et l'épingler au
 # correctif près ferait plus de bruit de mise à jour que de risque évité.
 openpyxl==3.1.5
+
+# EX-PHO-10 — conversion, redimensionnement, orientation EXIF et vignette.
+# `pillow-heif` est délibérément ABSENT : les quatre relevés du 26 août
+# (iPhone 18.7 et Android, capture et galerie) ont tous livré du JPEG réel,
+# Safari convertissant le HEIC à l'entrée de fichier. Il aurait exigé `libheif`
+# en natif dans l'image « slim », donc une compilation, à dix jours de
+# l'événement. Ce qui arriverait dans un format inconnu suit le chemin d'échec
+# d'EX-PHO-33 : original intact, retrait gratuit, photo facultative.
+Pillow==11.1.0

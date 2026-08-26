@@ -252,75 +252,158 @@ VARIANTES = {"original": ("originaux", "chemin_original"),
              "vignette": ("vignettes", "chemin_vignette")}
 
 
-def chemin_fichier(photo: Photo, variante: str) -> Path | None:
-    """Le chemin sur le volume, ou `None` si cette variante n'existe pas encore.
+# --------------------------------------------------------------------------- #
+# La conversion (EX-PHO-10, EX-PHO-11, EX-PHO-33)
+# --------------------------------------------------------------------------- #
 
-    Les photos vivent sur le volume et ne sont **jamais** servies par
-    `/static`, qui est monté publiquement : quatre-vingt-treize photos
-    d'invités derrière un chemin devinable serait le seul vrai incident
-    possible de cette soirée.
+# Mesuré au morceau A : de 1,6 à 24,5 Mpx, de 514 ko à 5,25 Mo. 1600 couvre un
+# téléphone à trois fois la densité et un écran d'ordinateur ; le recueil
+# imprimé tirera sur l'original, qui reste intact.
+COTE_WEB = 1600
+COTE_VIGNETTE = 400
+QUALITE_WEB = 85
+QUALITE_VIGNETTE = 80
+
+# Garde-fou contre une image-bombe : 24,5 Mpx au pire des relevés réels, on
+# laisse quatre fois la marge. Au-delà, refus définitif — décompresser une
+# image de deux gigapixels tuerait le conteneur, et avec lui la soirée.
+PIXELS_MAX = 100_000_000
+
+
+def _preparer(image):
+    """Oriente, aplatit la transparence, ramène en RVB.
+
+    `exif_transpose` ne suppose **jamais** qu'un EXIF existe : mesuré au
+    morceau A, la photo de galerie Android n'en portait aucun et arrivait déjà
+    dans le bon sens. Sans EXIF, l'image ressort inchangée.
     """
-    if variante not in VARIANTES:
-        return None
-    dossier, colonne = VARIANTES[variante]
-    nom = getattr(photo, colonne, None)
-    if not nom:
-        return None
-    racine = (config.projet().dossier_medias / "photos_invites" / dossier).resolve()
-    chemin = (racine / nom).resolve()
-    # Ceinture et bretelles : le nom vient de la base, donc il est sain — mais
-    # une base réparée à la main ne l'est plus forcément.
-    if racine not in chemin.parents:
-        return None
-    return chemin if chemin.exists() else None
+    from PIL import ImageOps
+
+    image = ImageOps.exif_transpose(image) or image
+    if image.mode in ("RGBA", "LA", "P"):
+        from PIL import Image as _Image
+
+        image = image.convert("RGBA")
+        fond = _Image.new("RGB", image.size, (255, 255, 255))
+        fond.paste(image, mask=image.split()[-1])
+        return fond
+    return image.convert("RGB")
 
 
-def retirer(photo_uuid: str, par: str | None = None,
-            pour_le_compte_de: str | None = None) -> bool:
-    """Suppression douce (EX-GEN-03) : la ligne se marque, le fichier reste.
+def convertir(photo_uuid: str) -> None:
+    """Produit les versions web et vignette. Traitant de `conversion_image`.
 
-    Ne débite rien. `EX-PHO-37` compte les **modifications**, et une
-    modification est « une suppression **suivie d'un nouvel envoi** » : c'est
-    le dépôt suivant qui coûte, jamais le retrait. Retirer sans renvoyer ne
-    coûte donc rien, et c'est ce que veut `EX-PHO-33` pour une photo en échec.
+    **L'original n'est jamais retouché** (`EX-PHO-11`) : on le lit, on n'y
+    écrit pas. Les deux dérivés sont écrits AVANT la mise à jour de la ligne :
+    une photo annoncée `prete` dont le fichier n'existerait pas encore
+    donnerait un cadre vide sur le téléphone de l'invité.
+
+    *Effet de bord voulu :* Pillow n'écrit pas l'EXIF si on ne le lui passe
+    pas. Les versions web et vignette partent donc **sans coordonnées GPS ni
+    modèle d'appareil**, alors que l'original les garde sur le volume, derrière
+    le mot de passe d'administration. C'est la version web qui circulera dans
+    le recueil.
     """
+    from PIL import Image, UnidentifiedImageError
+
+    Image.MAX_IMAGE_PIXELS = PIXELS_MAX
+
+    with bd.Seance() as seance:
+        photo = seance.get(Photo, photo_uuid)
+        if photo is None:
+            raise taches.EchecDefinitif(f"photo {photo_uuid} introuvable")
+        relatif = photo.chemin_original
+        est_supprimee = photo.supprimee
+
+    if est_supprimee:
+        # Remplacée pendant que la tâche attendait : convertir la précédente
+        # écraserait la nouvelle dans l'affichage. Rien à faire, et ce n'est
+        # pas un échec — l'invité n'a rien à se voir rendre.
+        return
+
+    source = _dossier("originaux") / relatif
+    if not source.is_file():
+        raise taches.EchecDefinitif(f"original absent : {relatif}")
+
+    try:
+        with Image.open(source) as image:
+            image.load()            # force le décodage : un fichier tronqué
+            prepare = _preparer(image)  # échoue ici, pas au moment d'écrire
+            web = prepare.copy()
+            web.thumbnail((COTE_WEB, COTE_WEB), Image.LANCZOS)
+            vignette = prepare.copy()
+            vignette.thumbnail((COTE_VIGNETTE, COTE_VIGNETTE), Image.LANCZOS)
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        # Un format que Pillow ne sait pas lire ne le saura pas davantage au
+        # troisième essai : définitif, jamais différé.
+        raise taches.EchecDefinitif(
+            f"image illisible ({type(exc).__name__} — {exc})") from exc
+
+    nom = f"{photo_uuid}.jpg"
+    for image, dossier, qualite in ((web, "web", QUALITE_WEB),
+                                    (vignette, "vignettes", QUALITE_VIGNETTE)):
+        cible = _dossier(dossier) / nom
+        cible.parent.mkdir(parents=True, exist_ok=True)
+        image.save(cible, "JPEG", quality=qualite, optimize=True)
+
     with bd.Seance() as seance:
         photo = seance.get(Photo, photo_uuid)
         if photo is None or photo.supprimee:
-            return False
-        photo.supprimee = True
-        photo.supprimee_le = config.maintenant()
-        bd.journaliser(seance, Journal.PHOTO_RETIREE, objet_uuid=photo_uuid,
-                       objet_type="photo",
-                       acteur=par or photo.personne_uuid,
-                       pour_le_compte_de=pour_le_compte_de,
-                       details={"etat_au_retrait": photo.etat})
+            return
+        photo.chemin_web = nom
+        photo.chemin_vignette = nom
+        photo.etat = "prete"
         seance.commit()
-        return True
 
 
-def par_personne(avec_test: bool = False) -> dict[str, Photo]:
-    """La photo vivante de chaque personne, indexée par `personne_uuid`.
+def marquer_echec(photo_uuid: str, erreur: str) -> None:
+    """Crochet d'échec définitif de `conversion_image`.
 
-    EX-TST-04 — le test est exclu par défaut, comme `lister()` et `tables()`.
+    `EX-PHO-33` — l'état `echouee` signifie échec de **conversion**, pas
+    d'envoi : l'original est intact sur le volume. Le crédit est donc rendu,
+    par une ligne de journal comptée en soustraction — le budget reste dérivé,
+    aucun compteur n'est touché.
+
+    **Idempotent** : deux passages ne rendent qu'un crédit. Sans ce contrôle,
+    une tâche rejouée offrirait des dépôts supplémentaires à chaque échec.
     """
     with bd.Seance() as seance:
-        requete = (select(Photo)
-                   .where(Photo.portee == "personnelle",
-                          Photo.supprimee.is_(False))
-                   .order_by(Photo.creee_le))
-        if not avec_test:
-            requete = requete.where(Photo.est_test.is_(False))
-        return {p.personne_uuid: p for p in seance.scalars(requete)}
+        photo = seance.get(Photo, photo_uuid)
+        if photo is None or photo.etat == "echouee":
+            return
+        photo.etat = "echouee"
+        bd.journaliser(
+            seance, Journal.PHOTO_ECHOUEE, objet_uuid=photo_uuid,
+            objet_type="photo", acteur=photo.personne_uuid,
+            details={"erreur": erreur[:300]})
+        seance.commit()
 
 
-def etats(avec_test: bool = False) -> dict[str, int]:
-    """Le décompte par état, pour le tableau de bord (EX-ADM-18).
+def reprendre_conversions_perdues() -> int:
+    """Remet en file les photos restées en traitement sans tâche vivante.
 
-    Dérivé, comme tout le reste : aucune colonne ne le porte.
+    Même raisonnement qu'`EX-ARC-11` pour les tâches interrompues : un état
+    intermédiaire sans rien pour le faire avancer est un état définitif qui
+    s'ignore. Couvre le redémarrage en plein travail — et les photos déposées
+    avant que le traitant n'existe, qui seraient restées « en préparation »
+    jusqu'au 5 septembre.
+
+    Ne boucle pas : une conversion qui échoue définitivement fait passer la
+    photo en `echouee`, donc hors de cette requête.
     """
-    compte = {"traitement": 0, "prete": 0, "echouee": 0}
-    for photo in par_personne(avec_test).values():
-        compte[photo.etat] = compte.get(photo.etat, 0) + 1
-    compte["total"] = sum(compte[c] for c in ("traitement", "prete", "echouee"))
-    return compte
+    from modeles import Tache
+
+    with bd.Seance() as seance:
+        vivantes = set(seance.scalars(
+            select(Tache.objet_uuid).where(
+                Tache.type == "conversion_image",
+                Tache.etat.in_(("en_attente", "en_cours")))))
+        perdues = [p for p in seance.scalars(
+            select(Photo).where(Photo.etat == "traitement",
+                                Photo.supprimee.is_(False)))
+            if p.uuid not in vivantes]
+        identifiants = [p.uuid for p in perdues]
+
+    for identifiant in identifiants:
+        taches.mettre_en_file("conversion_image", identifiant)
+    return len(identifiants)

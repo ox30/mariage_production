@@ -35,6 +35,7 @@ from fastapi.templating import Jinja2Templates
 import acces
 import base_donnees as bd
 import config
+import debit
 import depot_objet
 import ia
 import identite
@@ -1089,6 +1090,7 @@ def tableau(request: Request, test: str = "", _: str = Depends(admin)):
             "fuites": sum(1 for p in participations if p.fuites_noms),
             "sur_le_test": sur_le_test,
             "mode_test": bd.mode_test_actif(),
+            "debit": debit.dernier(),
         },
     )
 

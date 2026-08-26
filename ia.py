@@ -12,6 +12,8 @@ import unicodedata
 
 import httpx
 
+import debit
+
 URL_API = "https://api.anthropic.com/v1/messages"
 MODELE_DEFAUT = "claude-sonnet-5"
 # Borne, jamais facturée (EX-IA-34). Le modèle et ce plafond sont des
@@ -345,6 +347,15 @@ def generer(config: dict, participation: dict) -> dict:
     duree = time.monotonic() - debut
     trace["duree_s"] = round(duree, 1)
     trace["code_http"] = reponse.status_code
+
+    # Le palier de débit se relève ICI, avant tout aiguillage sur le code HTTP :
+    # les en-têtes sont présents sur une réponse 429 comme sur un succès, et
+    # c'est justement quand ça sature qu'on veut le chiffre. Le relevé ne
+    # régule rien — il rend visible ce qu'on lisait jusque-là sur la console,
+    # une fois, hors de l'application.
+    releve = debit.noter(reponse.headers)
+    if releve:
+        trace["debit"] = releve
 
     if reponse.status_code != 200:
         detail = f"HTTP {reponse.status_code} — {reponse.text[:300]}"

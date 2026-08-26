@@ -35,6 +35,42 @@
          <span class="etiquette">fuites de noms</span></div>
   </div>
 
+  {# Le palier de débit, relevé sur la dernière réponse de l'API. Il se lisait
+     jusque-là sur la console Anthropic — une fois, hors de l'application,
+     donc périmé le lendemain et invisible le soir où il compterait.
+
+     L'ÂGE est affiché avec : sans lui, on lirait « reste 74 200 » en croyant
+     que c'est maintenant, alors que les compteurs se réinitialisent à la
+     minute. #}
+  <h2>Débit de l'API</h2>
+  {% if not debit %}
+    <p class="discret">Aucun relevé : la limite s'affichera ici dès la
+       prochaine génération. Elle se lit aussi sur la console Anthropic,
+       page <em>Usage</em>.</p>
+  {% else %}
+    <table>
+      <tr><th>Axe</th><th class="chiffre">Limite / min</th>
+          <th class="chiffre">Restant</th><th class="chiffre">Utilisé</th></tr>
+      {% for nom, axe in debit.axes.items() %}
+      <tr>
+        <td>{{ {"sortie": "Jetons de sortie", "entree": "Jetons d'entrée",
+                "requetes": "Requêtes"}.get(nom, nom) }}</td>
+        <td class="chiffre">{{ axe.limite if axe.limite is not none else "—" }}</td>
+        <td class="chiffre">{{ axe.reste if axe.reste is not none else "—" }}</td>
+        <td class="chiffre">{{ axe.part_utilisee ~ " %" if axe.part_utilisee is not none else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="discret">
+      Relevé il y a {{ debit.age_s }} s. Les compteurs se réinitialisent à la
+      minute&nbsp;: un relevé ancien ne dit rien de l'instant présent.
+      La limite vaut pour toute l'organisation, pas pour cette clé seule —
+      un autre outil qui appellerait l'API pendant la soirée puiserait au même
+      budget. Si la sortie sature, baisser <code>worker.fils</code> dans
+      <code>config.yaml</code> agit sans redéployer (EX-ARC-20).
+    </p>
+  {% endif %}
+
   <p class="discret">Multipliez les jetons par cent participants et trois
      générations pour estimer la soirée réelle. Les tarifs figurent sur la
      console Anthropic ; ils changent, ne les codez pas en dur.</p>

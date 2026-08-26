@@ -444,6 +444,36 @@ Le bandeau `MODE TEST` se **dérive** d'une chronique réellement en base — ci
 grandeur du projet à suivre cette règle. Un interrupteur dirait ce qu'on a
 réglé ; ceci dit ce qui est.
 
+## Le palier de débit
+
+Relevé sur **chaque réponse** de l'API, dans `debit.py`, et affiché au tableau
+de bord. Le point 8 de l'annexe C demandait de le lire sur la console
+Anthropic : une lecture ponctuelle, hors de l'application, périmée le lendemain
+et invisible le soir où elle compterait.
+
+Relevé **avant** l'aiguillage sur le code HTTP : les en-têtes sont présents sur
+un `429` comme sur un succès, et c'est justement quand ça sature qu'on veut le
+chiffre. La trace l'emporte, donc le journal garde le palier au moment exact où
+il a lâché — ce qu'aucune console ne dira après coup.
+
+**Il ne régule rien.** `taches.py` réessaie déjà sur `ErreurDebit` en
+respectant le `retry-after`. Les mesures donnent 59 % du plafond de sortie à
+huit fils : une régulation proactive coûterait plus de risque qu'elle n'en
+retire.
+
+**Il n'est pas persisté, et il porte son âge.** Les compteurs se
+réinitialisent à la minute : un plafond restant d'il y a trois heures ne dit
+rien, et le garder en base donnerait un chiffre qu'on croirait actuel. Un axe
+absent est **omis**, jamais mis à zéro — zéro voudrait dire « plus de budget »,
+le contraire de « on ne sait pas ».
+
+*Paliers relevés le 26 août pour Claude Sonnet 5* : 1 000 requêtes/min,
+500 000 jetons d'entrée/min, **80 000 jetons de sortie/min**. Le débit de
+sortie est le seul axe contraignant — huit fils en consomment 59 %, contre 24 %
+de l'entrée et 3 % des requêtes. Treize fils le satureraient. La limite vaut
+pour toute l'**organisation** : un autre outil appelant l'API pendant la soirée
+puiserait au même budget.
+
 ## L'administration, et ce qui sort d'elle
 
 Quatre onglets — **Invités · Tables · Régions · Tableau** — tous derrière
@@ -582,6 +612,11 @@ panne.py` échouait sur le mot écrit dans une explication, et `« serveur:app �
 in Dockerfile` passait encore après retour à `main:app`, parce que le
 commentaire qui justifiait le choix contenait la chaîne. Contrôler la
 **structure** — les imports par `ast`, la ligne `CMD` isolée — et non le texte.
+
+**Un cas de test trop frais n'exerce pas une assertion sur le temps.** L'âge
+d'un relevé vaut zéro dans la seconde qui suit, qu'il soit calculé ou figé : le
+contrôle ne pouvait pas distinguer les deux. Faire **vieillir** l'objet plutôt
+que d'attendre.
 
 **Un cas de test trop petit n'exerce pas l'assertion qu'il porte.** Le message
 d'essai du bloc d'erreur était trop court pour produire assez de lignes : le

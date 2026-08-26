@@ -248,3 +248,95 @@ assert set(bd.doublons_de_noms()) == {b, c}, bd.doublons_de_noms()
 print("TOUT PASSE — doublons dérivés, sensibles ni à la casse ni aux accents")
 
 httpx.post = vrai_post
+
+
+# --- Le palier de débit se relève sur chaque réponse ----------------------
+# Le point 8 de l'annexe C demandait de le lire sur la console : une lecture
+# ponctuelle, hors de l'application, périmée le lendemain et invisible le soir
+# où elle compterait. L'API le dit d'elle-même sur chaque réponse.
+import debit as _debit
+
+_ENTETES = {
+    "anthropic-ratelimit-output-tokens-limit": "80000",
+    "anthropic-ratelimit-output-tokens-remaining": "47200",
+    "anthropic-ratelimit-output-tokens-reset": "2026-09-05T21:31:00Z",
+    "anthropic-ratelimit-input-tokens-limit": "500000",
+    "anthropic-ratelimit-input-tokens-remaining": "488000",
+    "anthropic-ratelimit-requests-limit": "1000",
+    "anthropic-ratelimit-requests-remaining": "992",
+}
+
+_debit.oublier()
+assert _debit.dernier() is None, "aucun relevé ne doit être inventé au départ"
+
+_debit.noter(_ENTETES)
+_lu = _debit.dernier()
+assert set(_lu["axes"]) == {"sortie", "entree", "requetes"}, _lu["axes"]
+assert _lu["axes"]["sortie"] == {"limite": 80000, "reste": 47200,
+                                 "reinitialise_le": "2026-09-05T21:31:00Z",
+                                 "part_utilisee": 41}
+# L'âge est calculé À LA LECTURE : stocké, il figerait un relevé de trois
+# heures en « maintenant », et l'on croirait disposer d'un budget qui n'existe
+# plus. Les compteurs se réinitialisent à la minute.
+assert _lu["age_s"] == 0
+assert "mesure_a" not in _lu
+
+# Éprouvé en faisant VIEILLIR le relevé : lu dans la foulée, son âge vaut zéro
+# qu'il soit calculé ou figé, et le contrôle ne pouvait pas distinguer les
+# deux. Le cas de test était trop frais pour exercer ce qu'il portait.
+with _debit._verrou:
+    _debit._dernier["mesure_a"] -= 180
+assert _debit.dernier()["age_s"] >= 180, \
+    "un relevé de trois minutes se présente comme neuf : on le croirait actuel"
+_debit.noter(_ENTETES)
+assert _debit.dernier()["age_s"] == 0, "un relevé neuf doit repartir de zéro"
+
+# Un axe absent est OMIS, jamais mis à zéro : zéro voudrait dire « plus de
+# budget », ce qui est le contraire de « on ne sait pas ». Derrière un espace
+# de travail, l'API n'envoie que la limite la plus contraignante.
+_debit.oublier()
+_debit.noter({"anthropic-ratelimit-output-tokens-limit": "80000",
+              "anthropic-ratelimit-output-tokens-remaining": "0"})
+_partiel = _debit.dernier()
+assert set(_partiel["axes"]) == {"sortie"}, _partiel["axes"]
+assert _partiel["axes"]["sortie"]["part_utilisee"] == 100, "zéro restant = 100 % utilisé"
+
+# Et une réponse sans aucun en-tête n'efface pas le dernier relevé connu :
+# l'effacer donnerait « aucun relevé » pour une réponse qui n'en portait pas.
+assert _debit.noter({"content-type": "application/json"}) == {}
+assert _debit.dernier()["axes"], "le relevé précédent a été effacé"
+print("TOUT PASSE — le relevé de débit omet ce qu'il ignore et porte son âge")
+
+# --- Le circuit complet, succès ET saturation ----------------------------
+# Les en-têtes sont présents sur un 429 comme sur un succès, et c'est
+# justement quand ça sature qu'on veut le chiffre. D'où le relevé AVANT
+# l'aiguillage sur le code HTTP.
+#
+# Réutilise `FausseReponse` et `PARTICIPATION` du fichier plutôt que d'en
+# refaire : mon premier jet en réécrivait, et sa charge incomplète levait un
+# KeyError qui masquait ce que le bloc prétendait éprouver.
+_debit.oublier()
+os.environ["ANTHROPIC_API_KEY"] = "cle-de-test"
+_vrai_post = httpx.post
+try:
+    for _code, _attendu in ((429, ia.ErreurDebit), (200, None)):
+        _debit.oublier()
+        httpx.post = (lambda code: lambda *a, **k: FausseReponse(
+            code=code, charge=charge_utile(PORTRAIT_VALIDE), entetes=dict(_ENTETES)))(_code)
+        _leve = None
+        try:
+            ia.generer(CONFIG, dict(PARTICIPATION))
+        except Exception as exc:
+            _leve = exc
+        if _attendu:
+            assert isinstance(_leve, _attendu), (type(_leve), _code)
+            # La trace emporte le relevé : le journal garde donc le palier au
+            # moment exact où il a lâché, ce qu'aucune console ne dira après
+            # coup.
+            assert _leve.trace.get("debit", {}).get("sortie"), _leve.trace
+        assert _debit.dernier() is not None, f"aucun relevé après un {_code}"
+        assert _debit.dernier()["axes"]["sortie"]["limite"] == 80000
+finally:
+    httpx.post = _vrai_post
+    os.environ.pop("ANTHROPIC_API_KEY", None)
+print("TOUT PASSE — le palier se relève sur un succès comme sur une saturation")

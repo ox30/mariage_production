@@ -238,3 +238,89 @@ def deposer(personne_uuid: str, octets: bytes, est_test: bool = False) -> Photo:
 
     taches.mettre_en_file("conversion_image", identifiant)
     return photo
+
+
+# --------------------------------------------------------------------------- #
+# Lecture et retrait
+# --------------------------------------------------------------------------- #
+
+# Le segment d'URL ne devient JAMAIS un morceau de chemin. Il est traduit par
+# ce dictionnaire, et le nom du fichier vient de la ligne en base : c'est la
+# seule façon qu'un `../` dans l'URL ne veuille rien dire du tout.
+VARIANTES = {"original": ("originaux", "chemin_original"),
+             "web": ("web", "chemin_web"),
+             "vignette": ("vignettes", "chemin_vignette")}
+
+
+def chemin_fichier(photo: Photo, variante: str) -> Path | None:
+    """Le chemin sur le volume, ou `None` si cette variante n'existe pas encore.
+
+    Les photos vivent sur le volume et ne sont **jamais** servies par
+    `/static`, qui est monté publiquement : quatre-vingt-treize photos
+    d'invités derrière un chemin devinable serait le seul vrai incident
+    possible de cette soirée.
+    """
+    if variante not in VARIANTES:
+        return None
+    dossier, colonne = VARIANTES[variante]
+    nom = getattr(photo, colonne, None)
+    if not nom:
+        return None
+    racine = (config.projet().dossier_medias / "photos_invites" / dossier).resolve()
+    chemin = (racine / nom).resolve()
+    # Ceinture et bretelles : le nom vient de la base, donc il est sain — mais
+    # une base réparée à la main ne l'est plus forcément.
+    if racine not in chemin.parents:
+        return None
+    return chemin if chemin.exists() else None
+
+
+def retirer(photo_uuid: str, par: str | None = None,
+            pour_le_compte_de: str | None = None) -> bool:
+    """Suppression douce (EX-GEN-03) : la ligne se marque, le fichier reste.
+
+    Ne débite rien. `EX-PHO-37` compte les **modifications**, et une
+    modification est « une suppression **suivie d'un nouvel envoi** » : c'est
+    le dépôt suivant qui coûte, jamais le retrait. Retirer sans renvoyer ne
+    coûte donc rien, et c'est ce que veut `EX-PHO-33` pour une photo en échec.
+    """
+    with bd.Seance() as seance:
+        photo = seance.get(Photo, photo_uuid)
+        if photo is None or photo.supprimee:
+            return False
+        photo.supprimee = True
+        photo.supprimee_le = config.maintenant()
+        bd.journaliser(seance, Journal.PHOTO_RETIREE, objet_uuid=photo_uuid,
+                       objet_type="photo",
+                       acteur=par or photo.personne_uuid,
+                       pour_le_compte_de=pour_le_compte_de,
+                       details={"etat_au_retrait": photo.etat})
+        seance.commit()
+        return True
+
+
+def par_personne(avec_test: bool = False) -> dict[str, Photo]:
+    """La photo vivante de chaque personne, indexée par `personne_uuid`.
+
+    EX-TST-04 — le test est exclu par défaut, comme `lister()` et `tables()`.
+    """
+    with bd.Seance() as seance:
+        requete = (select(Photo)
+                   .where(Photo.portee == "personnelle",
+                          Photo.supprimee.is_(False))
+                   .order_by(Photo.creee_le))
+        if not avec_test:
+            requete = requete.where(Photo.est_test.is_(False))
+        return {p.personne_uuid: p for p in seance.scalars(requete)}
+
+
+def etats(avec_test: bool = False) -> dict[str, int]:
+    """Le décompte par état, pour le tableau de bord (EX-ADM-18).
+
+    Dérivé, comme tout le reste : aucune colonne ne le porte.
+    """
+    compte = {"traitement": 0, "prete": 0, "echouee": 0}
+    for photo in par_personne(avec_test).values():
+        compte[photo.etat] = compte.get(photo.etat, 0) + 1
+    compte["total"] = sum(compte[c] for c in ("traitement", "prete", "echouee"))
+    return compte

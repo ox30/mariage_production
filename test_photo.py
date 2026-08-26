@@ -6,8 +6,11 @@ une vidéo renommée, un format inconnu, un budget épuisé, une conversion rat�
 qui ne doit rien coûter à l'invité.
 """
 
+import html as html_module
 import json
 import os
+import pathlib
+import re
 import struct
 import uuid as _uuid
 
@@ -31,6 +34,18 @@ def _jpeg(largeur=4032, hauteur=3024, remplissage=2000) -> bytes:
     sof = (b"\xff\xc0" + struct.pack(">H", 17) + b"\x08"
            + struct.pack(">HH", hauteur, largeur) + b"\x03" + b"\x00" * 9)
     return b"\xff\xd8" + app1 + sof + b"\xff\xda\x00\x0c" + b"\x00" * remplissage
+
+
+def _texte(html: str) -> str:
+    """Replie les blancs avant de comparer.
+
+    Jinja coupe les lignes du gabarit là où l'auteur les a coupées : « il vous
+    reste 3\n       changements » ne contient pas « 3 changements ». Une
+    assertion qui cherche la chaîne telle quelle éprouve la mise en forme du
+    gabarit, pas ce qu'il dit. Même famille que `test_identite.texte()`, qui
+    déséchappe pour la même raison.
+    """
+    return re.sub(r"\s+", " ", html_module.unescape(html))
 
 
 def _ftyp(marque: bytes) -> bytes:
@@ -196,7 +211,7 @@ assert "image/heic" not in texte
 # EX-PHO-28 — le décompte est sur le BOUTON, au moment de la décision, et pas
 # seulement dans l'aide (EX-CYC-13). Cherché dans le bloc du bouton et non dans
 # la page entière : « 3 changements » traîne ailleurs.
-bloc = texte.split('id="valider"')[1].split("</button>")[0]
+bloc = _texte(texte.split('id="valider"')[1].split("</button>")[0])
 assert "3 changements" in bloc, bloc
 
 # La CSP de cette route seule porte `blob:` ; la CSP globale n'y touche pas.
@@ -249,3 +264,87 @@ assert f'href="/photo/{premier.uuid}"' in portrait.text, \
 assert 'href="/fin"' in client.get(f"/photo/{premier.uuid}").text
 
 print("TOUT PASSE — les deux sorties mènent à la photo, et la photo laisse partir")
+
+
+# --- C1 : la quittance, quatre états -------------------------------------- #
+
+# Sans elle, l'invité ne sait pas si sa photo est arrivée, donc il renvoie —
+# et un renvoi consomme une modification. Le silence brûlait du budget.
+
+quittance = _chronique("Gwenaëlle")
+page = client.get(f"/portrait/{quittance.uuid}").text
+assert "Ajouter votre photo" in page
+assert "Votre photo est arrivée" not in page
+
+# État `traitement` : reçue, pas encore préparée. C'est la fenêtre qu'EX-PHO-10
+# rend inévitable, et celle où l'invité renvoyait.
+depot = photos.deposer(quittance.personne_uuid, _jpeg())
+page = client.get(f"/portrait/{quittance.uuid}").text
+assert "Votre photo est arrivée" in page, "aucune quittance à l'état traitement"
+assert "inutile de la renvoyer" in _texte(page)
+bloc = _texte(page.split("Votre photo est arrivée")[1].split("</a>")[0])
+assert "3 changements" in bloc, bloc          # EX-CYC-13, au moment du geste
+
+# Le fragment interrogé par HTMX porte la même quittance : sans ça, la page
+# rafraîchie toute seule pendant la génération l'effacerait.
+assert "Votre photo est arrivée" in client.get(
+    f"/portrait/{quittance.uuid}/etat").text
+
+# État `prete` : la vignette. Elle ne peut pas venir de /static.
+with bd.Seance() as seance:
+    ligne_photo = seance.get(Photo, depot.uuid)
+    ligne_photo.etat = "prete"
+    ligne_photo.chemin_vignette = f"{depot.uuid}.jpg"
+    seance.commit()
+page = client.get(f"/portrait/{quittance.uuid}").text
+assert f'src="/photo/{quittance.uuid}/vignette"' in page, page[-600:]
+assert "/static/" not in page.split('class="vignette"')[1][:200]
+
+# Le fichier n'existe pas encore (la conversion arrive en B2) : 404 franc,
+# jamais une trace ni une page à moitié rendue.
+assert client.get(f"/photo/{quittance.uuid}/vignette").status_code == 404
+
+# Le second garde-fou (`is_file`) couvre le fichier absent ; SEUL le premier
+# couvre `chemin_vignette` à None — sinon `dossier / None` lève un TypeError,
+# donc un 500 sur une page d'invité en pleine soirée. Deux cas réels : aucune
+# photo du tout, et une photo encore en conversion.
+sans_photo = _chronique("Hortense")
+assert client.get(f"/photo/{sans_photo.uuid}/vignette").status_code == 404, \
+    "une chronique sans photo doit rendre 404, jamais une erreur serveur"
+en_cours = _chronique("Isaure")
+photos.deposer(en_cours.personne_uuid, _jpeg())
+assert client.get(f"/photo/{en_cours.uuid}/vignette").status_code == 404, \
+    "une photo encore en conversion doit rendre 404, jamais une erreur serveur"
+
+vignettes = config.projet().dossier_medias / "photos_invites" / "vignettes"
+vignettes.mkdir(parents=True, exist_ok=True)
+(vignettes / f"{depot.uuid}.jpg").write_bytes(_jpeg())
+servie = client.get(f"/photo/{quittance.uuid}/vignette")
+assert servie.status_code == 200 and servie.content == _jpeg()
+
+# EX-PHO-33 — un échec de CONVERSION le dit, et dit qu'il n'a rien coûté.
+with bd.Seance() as seance:
+    seance.get(Photo, depot.uuid).etat = "echouee"
+    seance.commit()
+page = client.get(f"/portrait/{quittance.uuid}").text
+assert "n'a pas pu être préparée" in _texte(page)
+assert "ne vous a rien coûté" in _texte(page)
+assert f'href="/photo/{quittance.uuid}"' in page
+
+print("TOUT PASSE — la quittance couvre les quatre états de la photo")
+
+
+# --- les photos ne sont jamais servies publiquement ----------------------- #
+
+# Le dossier des médias est sur le volume ; `/static` est monté publiquement.
+# Les deux ne doivent jamais se rencontrer.
+racine_statique = pathlib.Path(main.RACINE) / "static"
+medias = config.projet().dossier_medias.resolve()
+assert racine_statique.resolve() not in medias.parents and \
+    medias != racine_statique.resolve(), \
+    "le dossier des médias est sous /static : les photos seraient publiques"
+assert client.get(f"/static/{depot.uuid}.jpg").status_code == 404
+assert client.get("/static/../photos_invites/originaux/"
+                  f"{depot.uuid}.jpg").status_code in (404, 400)
+
+print("TOUT PASSE — aucune photo n'est atteignable par /static")

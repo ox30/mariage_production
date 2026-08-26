@@ -250,6 +250,26 @@ input[type="text"]:focus, textarea:focus {
   50% { content: ".."; } 75% { content: "..."; }
 }
 
+/* La quittance de la photo. Même dessin que `.alerte`, en laiton : elle
+   rassure, elle n'avertit pas. Aucune couleur n'est écrite dans un gabarit,
+   la palette est ici et seulement ici. */
+.quittance {
+  border-left: 2px solid var(--laiton);
+  background: rgba(200, 162, 74, 0.12);
+  padding: 1rem 1.15rem;
+  margin: 1.25rem 0;
+  font-size: 0.95rem;
+}
+
+.vignette {
+  display: block;
+  width: 100%;
+  max-width: 12rem;
+  margin: 1.25rem auto 0.5rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--ardoise-clair);
+}
+
 .alerte {
   border-left: 2px solid var(--braise);
   background: rgba(178, 96, 58, 0.12);

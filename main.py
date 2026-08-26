@@ -28,7 +28,8 @@ import yaml
 from sqlalchemy import select
 from fastapi import (Depends, FastAPI, File, Form, HTTPException, Request,
                      UploadFile)
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse)
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -727,7 +728,14 @@ def _contexte_portrait(request: Request, ligne) -> dict:
     contexte = {"request": request, "p": ligne,
                 "max_generations": MAX_GENERATIONS,
                 "nb_bonus_mot": NB_BONUS_MOT,
-                "motifs": CONFIG.get("motifs_reprise", [])}
+                "motifs": CONFIG.get("motifs_reprise", []),
+                # EX-PHO-10 laisse TOUJOURS une fenêtre où la photo est reçue
+                # mais pas encore affichable : c'est le principe même de la
+                # conversion en tâche de fond. L'invité doit être renseigné
+                # dans cette fenêtre, sinon il renvoie — et un renvoi consomme
+                # une modification (EX-PHO-37). Le silence brûlait du budget.
+                "photo": photos.courante(ligne.personne_uuid),
+                "budget_photo": photos.budget(ligne.personne_uuid)}
     if ligne.etat in ("en_attente", "en_cours"):
         contexte["position"] = taches.position(ligne.uuid)
         contexte["attente_s"] = taches.attente_estimee_s(ligne.uuid)
@@ -932,6 +940,31 @@ async def deposer_photo(identifiant: str, fichier: UploadFile = File(...)):
         return JSONResponse({"refus": str(refus)}, status_code=422)
     # EX-PHO-10 — on rend la main tout de suite ; la conversion suit en file.
     return JSONResponse({"photo": photo.uuid, "etat": photo.etat})
+
+
+@app.get("/photo/{identifiant}/vignette")
+def vignette_photo(identifiant: str):
+    """La vignette de SA photo, servie depuis le volume.
+
+    **Jamais par `/static`**, qui est monté publiquement : quatre-vingt-treize
+    photos d'invités derrière un chemin devinable serait le seul vrai incident
+    possible de cette soirée. Le chemin se construit depuis la LIGNE EN BASE et
+    jamais depuis un segment d'URL — `identifiant` désigne la chronique, pas le
+    fichier, donc aucune traversée n'est représentable.
+
+    L'autorisation est celle du reste du parcours : l'UUID de la chronique est
+    la capacité, comme pour `/portrait/{uuid}`. Le risque est celui qu'assume
+    déjà EX-AUTH-18, pas un nouveau.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    photo = photos.courante(ligne.personne_uuid)
+    if photo is None or not photo.chemin_vignette:
+        raise HTTPException(status_code=404, detail="Aucune vignette")
+    chemin = (config.projet().dossier_medias / "photos_invites" / "vignettes"
+              / photo.chemin_vignette)
+    if not chemin.is_file():
+        raise HTTPException(status_code=404, detail="Aucune vignette")
+    return FileResponse(chemin, media_type="image/jpeg")
 
 
 @app.get("/fin", response_class=HTMLResponse)

@@ -23,7 +23,8 @@
   <nav class="onglets">
     {% for chemin, titre in [("/admin/invites", "Invités"),
                              ("/admin/tables", "Tables"),
-                             ("/admin/regions", "Régions")] %}
+                             ("/admin/regions", "Régions"),
+                             ("/admin/tableau", "Tableau")] %}
       <a href="{{ chemin }}"
          class="onglet{% if request.url.path.startswith(chemin) %} actif{% endif %}">{{ titre }}</a>
     {% endfor %}

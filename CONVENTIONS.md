@@ -444,6 +444,27 @@ Le bandeau `MODE TEST` se **dérive** d'une chronique réellement en base — ci
 grandeur du projet à suivre cette règle. Un interrupteur dirait ce qu'on a
 réglé ; ceci dit ce qui est.
 
+## L'administration, et ce qui sort d'elle
+
+Quatre onglets — **Invités · Tables · Régions · Tableau** — tous derrière
+`MOT_DE_PASSE_ADMIN`. `/deviner` reste **hors** de ces onglets : c'est l'écran
+des mariés, et `EX-AUTH-20` leur donne leur propre mot de passe.
+
+Le tableau sépare **production** et **test**, chacun à son adresse. Il était
+devenu aveugle au test depuis que `lister()` l'exclut — c'était pourtant
+l'endroit même où l'on vérifie le test de fumée du jour J.
+
+**Un export dit ce qu'il est, dans son enveloppe ET dans son nom de fichier.**
+Deux tableaux JSON nus ne se distinguent pas une fois sur le disque : l'un
+productif, l'autre de test, seraient interchangeables au moment où l'on s'en
+sert. Les deux marques sont posées parce que l'une des deux se perd toujours —
+le nom en renommant le fichier, l'enveloppe en l'ouvrant au milieu.
+
+`EX-TST-08` — l'export de production exclut le test, toujours ; l'export de
+test ne contient que lui. Les anciennes adresses `/tableau` et
+`/tableau/export.json` répondent en `308` : elles sont en signet et sur des
+notes.
+
 ## L'import des invités
 
 **Rien ne s'écrit sans simulation préalable** (`EX-ADM-16`). `preparer()` calcule
@@ -547,6 +568,13 @@ sortie compte se vérifie sur sa sortie, pas sur son code de retour.
 `../../config.yaml` est-il refusé ? » passait grâce à l'absence de la cible, pas
 grâce au filtre. Poser un vrai classeur atteignable, et vérifier d'abord qu'il
 l'est.
+
+**Une chaîne cherchée dans toute une page vient souvent d'ailleurs.** Quatre
+fois : `« empreinte »` trouvé dans un commentaire, `« serveur:app »` dans le
+commentaire du Dockerfile, `value="…"` dans le champ caché plutôt que dans le
+champ visible, `href="/admin/tableau"` dans le basculement de la page plutôt
+que dans sa navigation. Cibler la **structure** — la ligne, la balise, l'autre
+écran — et non le document.
 
 **Une assertion qui cherche une chaîne dans un fichier entier peut être
 satisfaite par un commentaire.** Deux fois le 25 août : `« empreinte » not in

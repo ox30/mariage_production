@@ -1054,9 +1054,23 @@ def _lieu_affiche(ligne) -> str:
     return region["libelle"]
 
 
-@app.get("/tableau", response_class=HTMLResponse)
-def tableau(request: Request, _: str = Depends(admin)):
-    participations = bd.lister()
+@app.get("/tableau")
+def tableau_ancienne_adresse(test: str = ""):
+    """L'adresse d'avant, gardée : elle est en signet et sur des notes."""
+    return RedirectResponse(f"/admin/tableau?test={test}", status_code=308)
+
+
+@app.get("/admin/tableau", response_class=HTMLResponse)
+def tableau(request: Request, test: str = "", _: str = Depends(admin)):
+    """EX-TST-05 — production par défaut, test sur demande explicite.
+
+    Le tableau montrait la production SEULE depuis que `lister()` exclut le
+    test : c'était l'endroit même où l'on vérifie le test de fumée du jour J,
+    et il était devenu aveugle à ce qu'on venait d'y faire.
+    """
+    sur_le_test = test == "oui"
+    participations = [p for p in bd.lister(avec_test=True)
+                      if bool(p.est_test) == sur_le_test]
     for p in participations:
         p.lieu_affiche = _lieu_affiche(p)
     jetons_entree = sum(p.jetons_entree or 0 for p in participations)
@@ -1073,14 +1087,43 @@ def tableau(request: Request, _: str = Depends(admin)):
             "duree_max": max(durees) if durees else None,
             "echecs": sum(1 for p in participations if p.etat == "echouee"),
             "fuites": sum(1 for p in participations if p.fuites_noms),
+            "sur_le_test": sur_le_test,
+            "mode_test": bd.mode_test_actif(),
         },
     )
 
 
 @app.get("/tableau/export.json")
-def export(_: str = Depends(admin)):
+def export_ancienne_adresse(test: str = ""):
+    return RedirectResponse(f"/admin/tableau/export.json?test={test}",
+                            status_code=308)
+
+
+@app.get("/admin/tableau/export.json")
+def export(test: str = "", _: str = Depends(admin)):
+    """EX-TST-08 — l'export productif exclut le test. Toujours.
+
+    **Le fichier dit ce qu'il est.** Un tableau JSON nu ne se distingue pas
+    d'un autre une fois sur le disque : deux exports, l'un productif l'autre de
+    test, seraient interchangeables au moment où l'on s'en sert. L'enveloppe et
+    le nom du fichier le disent tous les deux, parce que l'un des deux se perd
+    toujours — le nom en le renommant, l'enveloppe en ouvrant le fichier au
+    milieu.
+    """
+    sur_le_test = test == "oui"
+    lignes = [p for p in bd.lister(avec_test=True)
+              if bool(p.est_test) == sur_le_test]
+    nom_fichier = ("chroniques-TEST" if sur_le_test else "chroniques") + \
+        f"-{config.projet().identifiant}.json"
     return JSONResponse(
-        [
+        {
+            "contenu": "test" if sur_le_test else "production",
+            "projet": config.projet().identifiant,
+            "type_projet": config.projet().type,
+            "genere_le": config.en_heure_locale(
+                config.maintenant()).isoformat(timespec="seconds"),
+            "nombre": len(lignes),
+            "chroniques": [
             {
                 "uuid": p.uuid,
                 "prenom": p.prenom,
@@ -1103,6 +1146,8 @@ def export(_: str = Depends(admin)):
                 "etat": p.etat,
                 "derniere_erreur": p.derniere_erreur,
             }
-            for p in bd.lister()
-        ]
+                for p in lignes
+            ],
+        },
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
     )

@@ -1,9 +1,22 @@
-{% extends "base.html" %}
+{% extends "admin_base.html" %}
 {% block titre %}Tableau{% endblock %}
-{% block corps %}
-<div class="enveloppe" style="max-width:52rem">
-  <p class="surtitre">Le Livre des Convoqués</p>
-  <h1>Ce que ça coûte</h1>
+{% block panneau %}
+  <h1>{% if sur_le_test %}Les chroniques de test{% else %}Ce que ça coûte{% endif %}</h1>
+
+  {# EX-TST-05 — production par défaut, test sur demande explicite. Deux
+     adresses distinctes plutôt qu'un basculement en mémoire : chaque vue se
+     met en signet, se recharge, et l'on sait toujours ce qu'on regarde. #}
+  <p class="onglets" style="margin-bottom:1.4rem">
+    <a class="onglet{% if not sur_le_test %} actif{% endif %}"
+       href="/admin/tableau">Production</a>
+    <a class="onglet{% if sur_le_test %} actif{% endif %}"
+       href="/admin/tableau?test=oui">Test</a>
+  </p>
+
+  {% if sur_le_test %}
+    <p class="discret">Ces chroniques n'apparaissent ni sur la carte des mariés,
+       ni dans l'export de production, ni dans aucun total (EX-TST-04).</p>
+  {% endif %}
 
   <div class="bilan">
     <div><span class="valeur chiffre">{{ participations|length }}</span>
@@ -26,7 +39,7 @@
      générations pour estimer la soirée réelle. Les tarifs figurent sur la
      console Anthropic ; ils changent, ne les codez pas en dur.</p>
 
-  <p><a class="action sobre" href="/tableau/export.json">Export JSON complet</a></p>
+  <p><a class="action sobre" href="/admin/tableau/export.json{% if sur_le_test %}?test=oui{% endif %}">Export JSON complet</a></p>
 
   <h2>Détail</h2>
   <table>
@@ -58,5 +71,4 @@
     <tr><td>{{ lieu }}</td><td class="chiffre">{{ groupe|length }}</td></tr>
     {% endfor %}
   </table>
-</div>
 {% endblock %}

@@ -5,7 +5,8 @@ os.environ["MOT_DE_PASSE_ADMIN"] = "secret"
 os.environ.setdefault("WORKER_ACTIF", "0")
 os.environ.setdefault("INSTANTANE_ACTIF", "0")
 from openpyxl import Workbook
-import base_donnees as bd, import_invites, main, modeles, test_outils
+import base_donnees as bd, config, import_invites, main, modeles, test_outils
+import re as _re
 from sqlalchemy import select
 
 AUTH = {"Authorization": "Basic " + base64.b64encode(b"a:secret").decode()}
@@ -213,3 +214,80 @@ assert bd.mode_test_actif() is False, \
     "le bandeau reste allumé alors qu'aucune chronique de test ne subsiste"
 assert "MODE TEST" not in c.get("/admin/invites", headers=AUTH).text
 print("TOUT PASSE — la table de test est présente, invisible et étanche")
+
+# --- Le tableau est un onglet, et il sépare production et test -----------
+# Depuis que `lister()` exclut le test, le tableau était devenu aveugle à ce
+# qu'on venait d'y faire : c'était pourtant l'endroit où l'on vérifie le test
+# de fumée du jour J.
+_vraie = bd.personne(bd.creer_personne_libre("Vraie", "Personne"))
+_uid_vrai = bd.creer(_vraie.uuid, {"metier": "vrai"}, main.CODES_LIEUX)
+_uid_test = bd.creer(bd.resoudre("Test", "05").unique.uuid,
+                     {"metier": "essai"}, main.CODES_LIEUX)
+
+# Le tableau nomme les personnes, il n'affiche pas d'UUID : c'est sur la ligne
+# de tableau qu'il faut chercher, pas sur l'identifiant.
+_lignes_de = lambda page: _re.findall(r"<td>([^<]*?)</td>", page)
+
+_prod = c.get("/admin/tableau", headers=AUTH)
+assert _prod.status_code == 200
+assert "Vraie Personne" in _lignes_de(_prod.text), "la production manque au tableau"
+assert "Test 05" not in _lignes_de(_prod.text), \
+    "une chronique de test est mêlée à la production"
+
+_test = c.get("/admin/tableau?test=oui", headers=AUTH)
+assert "Test 05" in _lignes_de(_test.text), "le tableau de test ne montre pas le test"
+assert "Vraie Personne" not in _lignes_de(_test.text), "la production est mêlée au test"
+# Et les totaux suivent la vue : ils comptaient la production dans les deux.
+assert _prod.text.count("Vraie Personne") >= 1
+
+# Les deux vues ont chacune leur ADRESSE : un basculement en mémoire se perd
+# au rechargement, et l'on ne saurait plus ce qu'on regarde.
+assert 'href="/admin/tableau?test=oui"' in _prod.text
+assert 'href="/admin/tableau"' in _test.text
+# La navigation se vérifie depuis un AUTRE écran : sur le tableau lui-même,
+# « href="/admin/tableau" » vient aussi du basculement production/test, et
+# l'assertion passait même sans l'onglet. Quatrième fois qu'une chaîne cherchée
+# dans toute la page vient d'ailleurs que de ce qu'elle prétend éprouver.
+_ailleurs = c.get("/admin/invites", headers=AUTH).text
+for chemin in ("/admin/invites", "/admin/tables", "/admin/regions", "/admin/tableau"):
+    assert f'href="{chemin}"' in _ailleurs, f"{chemin} manque à la navigation"
+
+# L'ancienne adresse reste : elle est en signet et sur des notes.
+_ancienne = c.get("/tableau", headers=AUTH, follow_redirects=False)
+assert _ancienne.status_code == 308, _ancienne.status_code
+assert "/admin/tableau" in _ancienne.headers["location"]
+assert c.get("/admin/tableau").status_code == 401, "le tableau est ouvert à tous"
+print("TOUT PASSE — le tableau est un onglet et sépare production et test")
+
+# --- Un export dit ce qu'il est, dans le fichier ET dans son nom --------
+# Deux tableaux JSON nus ne se distinguent pas une fois sur le disque : l'un
+# productif, l'autre de test, seraient interchangeables au moment où l'on s'en
+# sert. Les deux marques sont posées parce que l'une des deux se perd toujours
+# — le nom en renommant, l'enveloppe en ouvrant le fichier au milieu.
+import json as _json
+
+for _suffixe, _contenu, _dans_le_nom in (("", "production", "chroniques-"),
+                                         ("?test=oui", "test", "chroniques-TEST-")):
+    _r = c.get(f"/admin/tableau/export.json{_suffixe}", headers=AUTH)
+    _d = _r.json()
+    assert _d["contenu"] == _contenu, _d["contenu"]
+    assert _d["nombre"] == len(_d["chroniques"]), "le compte annoncé ment"
+    assert _d["projet"] == config.projet().identifiant
+    assert _d["type_projet"] == config.projet().type
+    _disposition = _r.headers.get("content-disposition", "")
+    assert _dans_le_nom in _disposition, _disposition
+    assert _disposition.endswith('.json"'), _disposition
+
+# EX-TST-08 — l'export de production exclut le test. Toujours.
+_prod_json = c.get("/admin/tableau/export.json", headers=AUTH).json()
+assert all(x["uuid"] != _uid_test for x in _prod_json["chroniques"])
+assert any(x["uuid"] == _uid_vrai for x in _prod_json["chroniques"])
+_test_json = c.get("/admin/tableau/export.json?test=oui", headers=AUTH).json()
+assert [x["uuid"] for x in _test_json["chroniques"]] == [_uid_test], _test_json["nombre"]
+
+# Et les deux noms de fichier diffèrent : c'est tout l'intérêt.
+_n1 = c.get("/admin/tableau/export.json", headers=AUTH).headers["content-disposition"]
+_n2 = c.get("/admin/tableau/export.json?test=oui", headers=AUTH).headers["content-disposition"]
+assert _n1 != _n2, _n1
+assert c.get("/admin/tableau/export.json").status_code == 401
+print("TOUT PASSE — un export dit ce qu'il est, dans son enveloppe et dans son nom")

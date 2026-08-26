@@ -303,6 +303,21 @@ def locution_lieu(code: str) -> str:
 gabarits.env.globals["libelle_lieu"] = libelle_lieu
 gabarits.env.globals["locution_lieu"] = locution_lieu
 
+
+def heure_locale(instant) -> str:
+    """EX-GEN-04 — stocké en UTC, AFFICHÉ en Europe/Zurich.
+
+    Une seule source, `config.en_heure_locale`. Un gabarit qui formaterait
+    l'horodatage lui-même afficherait de l'UTC sans que rien ne le dise, et
+    « déposée à 19 h 34 » pour une photo de 21 h 34 est le genre d'écart qu'on
+    ne remarque qu'en cherchant autre chose.
+    """
+    return "—" if instant is None else config.en_heure_locale(
+        instant).strftime("%d/%m %H:%M")
+
+
+gabarits.env.globals["heure_locale"] = heure_locale
+
 # Sans marqueur de version, un navigateur qui a déjà chargé la feuille de style
 # la réutilise : une correction d'affichage faite à 22 h resterait invisible
 # pour tous ceux qui ont ouvert la page plus tôt — c'est-à-dire pour tout le
@@ -1151,10 +1166,160 @@ def _lieu_affiche(ligne) -> str:
     return region["libelle"]
 
 
+def _intitules_questions() -> dict[str, str]:
+    """Clé -> intitulé lu, pour que la fiche montre la QUESTION et non la clé.
+
+    `questions.yaml` est la référence éditoriale (EX-QUE-12) : les intitulés
+    s'y corrigent jusqu'au 4 septembre, et la fiche suit sans redéploiement.
+    """
+    intitules = {}
+    for bloc in ("obligatoires", "bonus"):
+        for question in CONFIG.get(bloc, []):
+            intitules[question["cle"]] = _substituer(
+                question.get("question", question["cle"]))
+            prealable = question.get("prealable")
+            if prealable:
+                intitules[prealable["cle"]] = _substituer(
+                    prealable.get("question", prealable["cle"]))
+    return intitules
+
+
+def _fiche(ligne) -> dict:
+    """Ce qu'une chronique montre à l'administrateur, réponses comprises."""
+    intitules = _intitules_questions()
+    reponses = json.loads(ligne.reponses_json or "{}")
+    return {
+        "p": ligne,
+        "lieu_affiche": _lieu_affiche(ligne),
+        # L'ordre du questionnaire, pas celui du dictionnaire : une fiche qui
+        # réordonne les réponses ne se relit pas à côté de l'écran d'origine.
+        "reponses": [(intitules.get(cle, cle), cle, valeur)
+                     for cle, valeur in sorted(
+                         reponses.items(),
+                         key=lambda kv: list(intitules).index(kv[0])
+                         if kv[0] in intitules else 999)],
+        "photo": photos.courante(ligne.personne_uuid),
+        "budget_photo": photos.budget(ligne.personne_uuid),
+    }
+
+
+@app.get("/admin/chroniques", response_class=HTMLResponse)
+def admin_chroniques(request: Request, test: str = "",
+                     _: str = Depends(admin)):
+    """EX-TST-05 — production par défaut, test sur demande explicite."""
+    sur_le_test = test == "oui"
+    lignes = [p for p in bd.lister(avec_test=True)
+              if bool(p.est_test) == sur_le_test]
+    for p in lignes:
+        p.lieu_affiche = _lieu_affiche(p)
+        p.photo = photos.courante(p.personne_uuid)
+    return gabarits.TemplateResponse(
+        "admin_chroniques.html",
+        {"request": request, "lignes": lignes, "sur_le_test": sur_le_test,
+         "mode_test": bd.mode_test_actif()},
+    )
+
+
+# ORDRE SIGNIFICATIF — `.json` est déclarée AVANT la page HTML. Starlette
+# apparie dans l'ordre de déclaration, et `{identifiant}` apparie volontiers
+# « <uuid>.json » : la page HTML avalerait l'export et rendrait 404 sur un
+# UUID suffixé. Même piège que deux règles CSS de même spécificité — dépendre
+# de l'ordre, c'est dépendre de l'endroit où quelqu'un posera la suivante.
+# `test_admin_chroniques.py` éprouve les deux, et tombe si on les réordonne.
+@app.get("/admin/chronique/{identifiant}.json")
+def admin_chronique_json(identifiant: str, _: str = Depends(admin)):
+    """EX-ADM-21 — une chronique, à URL stable, pour la repasser au modèle.
+
+    L'export complet est la sauvegarde de référence ; il est inexploitable
+    pour vérifier un cas. Cent chroniques dans un seul fichier ne se lisent
+    pas.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    return JSONResponse(
+        {
+            # Le fichier dit ce qu'il est : une chronique de test et une
+            # chronique productive seraient sinon interchangeables une fois
+            # sur le disque (EX-TST-08).
+            "projet": config.projet().identifiant,
+            "portee": "test" if ligne.est_test else "production",
+            "uuid": ligne.uuid,
+            "prenom": ligne.prenom, "nom": ligne.nom,
+            "lieu": ligne.lieu, "lieu_libelle": libelle_lieu(ligne.lieu),
+            "etage": ligne.etage,
+            "reponses": json.loads(ligne.reponses_json or "{}"),
+            "nom_fictif": ligne.nom_fictif, "peuple": ligne.peuple,
+            "portrait": ligne.portrait, "indice": ligne.indice,
+            "fuites_noms": ligne.fuites_noms, "modele": ligne.modele,
+            "duree_s": ligne.duree_s,
+            "jetons": [ligne.jetons_entree, ligne.jetons_sortie],
+            "nb_generations": ligne.nb_generations,
+            "nb_tentatives": ligne.nb_tentatives,
+            "etat": ligne.etat, "derniere_erreur": ligne.derniere_erreur,
+        },
+        headers={"Content-Disposition": 'attachment; filename='
+                 f'"chronique-{ligne.uuid[:8]}'
+                 f'{"-test" if ligne.est_test else ""}.json"'},
+    )
+
+
+@app.get("/admin/chronique/{identifiant}", response_class=HTMLResponse)
+def admin_chronique(request: Request, identifiant: str,
+                    _: str = Depends(admin)):
+    ligne = _chronique_ou_404(identifiant)
+    contexte = _fiche(ligne)
+    contexte.update({"request": request, "mode_test": bd.mode_test_actif()})
+    return gabarits.TemplateResponse("admin_chronique.html", contexte)
+
+
+@app.get("/admin/photo/{identifiant}/{variante}")
+def admin_photo_fichier(identifiant: str, variante: str,
+                        _: str = Depends(admin)):
+    """La photo, servie depuis le volume, derrière MOT_DE_PASSE_ADMIN.
+
+    **Jamais par `/static`.** Et `variante` est comparée à une liste close
+    avant tout usage : concaténée telle quelle, « ../../.. » sortirait du
+    dossier des médias. Le nom du fichier, lui, vient de la BASE.
+    """
+    if variante not in ("originaux", "web", "vignettes"):
+        raise HTTPException(status_code=404, detail="Variante inconnue")
+    ligne = _chronique_ou_404(identifiant)
+    photo = photos.courante(ligne.personne_uuid)
+    relatif = None if photo is None else {
+        "originaux": photo.chemin_original,
+        "web": photo.chemin_web,
+        "vignettes": photo.chemin_vignette,
+    }[variante]
+    if not relatif:
+        raise HTTPException(status_code=404, detail="Aucun fichier")
+    chemin = config.projet().dossier_medias / "photos_invites" / variante / relatif
+    if not chemin.is_file():
+        raise HTTPException(status_code=404, detail="Aucun fichier")
+    return FileResponse(chemin)
+
+
 @app.get("/tableau")
 def tableau_ancienne_adresse(test: str = ""):
     """L'adresse d'avant, gardée : elle est en signet et sur des notes."""
     return RedirectResponse(f"/admin/tableau?test={test}", status_code=308)
+
+
+def _decompte_photos(lignes) -> dict:
+    """Reçues, prêtes, en traitement, en échec — et combien de chroniques sans.
+
+    Les quatre se lisent ensemble : « 40 reçues » ne dit rien si l'on ignore
+    combien sont encore en conversion. Dérivé, jamais stocké (EX-GEN-07).
+    """
+    etats = {"prete": 0, "traitement": 0, "echouee": 0}
+    sans = 0
+    for ligne in lignes:
+        photo = photos.courante(ligne.personne_uuid)
+        if photo is None:
+            sans += 1
+        else:
+            etats[photo.etat] = etats.get(photo.etat, 0) + 1
+    etats["recues"] = sum(etats[e] for e in ("prete", "traitement", "echouee"))
+    etats["sans"] = sans
+    return etats
 
 
 @app.get("/admin/tableau", response_class=HTMLResponse)
@@ -1183,6 +1348,9 @@ def tableau(request: Request, test: str = "", _: str = Depends(admin)):
             "duree_moyenne": round(sum(durees) / len(durees), 1) if durees else None,
             "duree_max": max(durees) if durees else None,
             "echecs": sum(1 for p in participations if p.etat == "echouee"),
+            # EX-ADM-18 — « photos reçues ». Dérivé des chroniques affichées,
+            # donc la séparation production / test vaut aussi pour elles.
+            "photos": _decompte_photos(participations),
             "fuites": sum(1 for p in participations if p.fuites_noms),
             "sur_le_test": sur_le_test,
             "mode_test": bd.mode_test_actif(),

@@ -1,0 +1,95 @@
+{% extends "admin_base.html" %}
+{% block panneau %}
+<p class="discret"><a href="/admin/chroniques{% if p.est_test %}?test=oui{% endif %}">←
+   Toutes les chroniques</a></p>
+
+<h1>{{ p.prenom }} {{ p.nom }}</h1>
+<p class="discret">
+  {{ p.nom_fictif or "sans nom fictif" }} · {{ p.peuple or "—" }} ·
+  {{ lieu_affiche }} · étage {{ p.etage }} ·
+  {{ p.nb_generations }} génération(s) sur {{ p.nb_tentatives }} tentative(s)
+  {% if p.est_test %} · <span class="vigilance">CHRONIQUE DE TEST</span>{% endif %}
+</p>
+
+{% if p.derniere_erreur %}
+  <div class="alerte"><strong>Dernière erreur :</strong> {{ p.derniere_erreur }}</div>
+{% endif %}
+{% if p.fuites_noms %}
+  {# EX-IA-13 — un nom réel passé en sortie du modèle est à arbitrer, pas à
+     corriger en silence. #}
+  <div class="alerte"><strong>Fuite de noms à arbitrer :</strong>
+    {{ p.fuites_noms|join(", ") }}</div>
+{% endif %}
+
+<h2>La photo</h2>
+{% if photo is none %}
+  <p class="discret">Aucune photo déposée.
+     {{ budget_photo.restants }} dépôt(s) restant(s) sur
+     {{ budget_photo.maximum }}.</p>
+{% else %}
+  {# Les fichiers vivent sur le VOLUME et se servent derrière
+     MOT_DE_PASSE_ADMIN, jamais par /static qui est monté publiquement. #}
+  {% if photo.chemin_vignette %}
+    <img class="apercu-admin" src="/admin/photo/{{ p.uuid }}/vignettes"
+         alt="Photo de {{ p.prenom }}">
+  {% elif photo.etat == "traitement" %}
+    <p class="vigilance">Reçue, pas encore convertie — aucune vignette à
+       montrer. L'original est sur le volume.</p>
+  {% else %}
+    <p class="alerte">Conversion échouée. <strong>L'original est
+       intact</strong> sur le volume (EX-PHO-33).</p>
+  {% endif %}
+  <p class="discret">
+    état <strong>{{ photo.etat }}</strong> ·
+    déposée le {{ heure_locale(photo.creee_le) }} ·
+    {{ budget_photo.consommes }} dépôt(s) sur {{ budget_photo.maximum }},
+    {{ budget_photo.restants }} restant(s)
+    {% if budget_photo.echecs %} · {{ budget_photo.echecs }} rendu(s) après
+      échec de conversion{% endif %}
+  </p>
+  <p class="discret">
+    <a href="/admin/photo/{{ p.uuid }}/originaux">Original</a>
+    {% if photo.chemin_web %} ·
+      <a href="/admin/photo/{{ p.uuid }}/web">Version web</a>{% endif %}
+  </p>
+{% endif %}
+
+<h2>Ce qu'il a répondu</h2>
+{% if not reponses %}
+  <p class="discret">Aucune réponse enregistrée.</p>
+{% else %}
+<table class="grille">
+  <tbody>
+  {% for intitule, cle, valeur in reponses %}
+    <tr>
+      <th style="text-align:left;width:45%">{{ intitule }}
+        <br><code class="discret">{{ cle }}</code></th>
+      <td>{{ valeur }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>Le portrait</h2>
+{% if not p.portrait %}
+  <p class="discret">Pas encore de portrait — état « {{ p.etat }} ».</p>
+{% else %}
+  <div class="parchemin">
+    {% for paragraphe in p.portrait.split("\n") if paragraphe.strip() %}
+      <p>{{ paragraphe }}</p>
+    {% endfor %}
+  </div>
+  {% if p.indice %}<p class="discret"><strong>Indice :</strong> {{ p.indice }}</p>{% endif %}
+  <p class="discret">
+    {{ p.modele or "—" }} · {{ p.duree_s or "—" }} s ·
+    {{ p.jetons_entree or 0 }} jetons d'entrée,
+    {{ p.jetons_sortie or 0 }} de sortie
+  </p>
+{% endif %}
+
+<p class="discret">
+  <a href="/admin/chronique/{{ p.uuid }}.json">Exporter cette chronique</a> ·
+  <a href="/portrait/{{ p.uuid }}">Voir comme l'invité</a>
+</p>
+{% endblock %}

@@ -31,6 +31,15 @@
          <span class="etiquette">jetons sortie</span></div>
     <div><span class="valeur chiffre">{{ echecs }}</span>
          <span class="etiquette">échecs</span></div>
+    {# EX-ADM-18 — « photos reçues ». Les quatre chiffres se lisent ensemble :
+       « 40 reçues » ne dit rien si l'on ignore combien attendent encore leur
+       conversion. #}
+    <div><span class="valeur chiffre">{{ photos.recues }}</span>
+      <span class="etiquette">photos reçues</span></div>
+    <div><span class="valeur chiffre">{{ photos.traitement }}</span>
+      <span class="etiquette">en conversion</span></div>
+    <div><span class="valeur chiffre">{{ photos.echouee }}</span>
+      <span class="etiquette">photos en échec</span></div>
     <div><span class="valeur chiffre">{{ fuites }}</span>
          <span class="etiquette">fuites de noms</span></div>
   </div>

@@ -417,6 +417,12 @@ class Journal(_CleUUID, Base):
     # Un échec technique ne débite donc jamais le quota de l'invité.
     CHRONIQUE_TENTEE = "chronique_tentee"
     CHRONIQUE_GENEREE = "chronique_generee"
+    # Source du budget de photo (EX-GEN-07). `PHOTO_ECHOUEE` est journalisée
+    # par la conversion et vient EN SOUSTRACTION : un échec de notre côté ne
+    # se décompte pas à l'invité (EX-PHO-33).
+    PHOTO_DEPOSEE = "photo_deposee"
+    PHOTO_ECHOUEE = "photo_echouee"
+    PHOTO_RETIREE = "photo_retiree"
 
     horodatage: Mapped[datetime] = mapped_column(HorodatageUTC,
                                                  default=maintenant)

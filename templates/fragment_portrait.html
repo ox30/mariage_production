@@ -69,6 +69,9 @@
     </div>
   </div>
 
+  {# Le retour vers la photo : sans lui, « Plus tard » serait un cul-de-sac. #}
+  <a class="action sobre" href="/photo/{{ p.uuid }}">Votre photo</a>
+
   <form method="post" action="/portrait/{{ p.uuid }}/valider">
     <button class="action" type="submit">C'est bien moi</button>
   </form>

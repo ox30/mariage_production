@@ -26,7 +26,8 @@ from urllib.parse import quote, urlparse
 
 import yaml
 from sqlalchemy import select
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import (Depends, FastAPI, File, Form, HTTPException, Request,
+                     UploadFile)
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +45,7 @@ import instantane
 import modeles
 import noms
 import panne
+import photos
 import taches
 
 RACINE = os.path.dirname(os.path.abspath(__file__))
@@ -187,6 +189,29 @@ def _hors_porte(chemin: str) -> bool:
                or chemin.startswith(c) for c in CHEMINS_LIBRES)
 
 
+# EX-SEC-08 — une seule source pour la CSP. `CSP_AVEC_BLOB` s'en DÉRIVE :
+# écrites à la main toutes les deux, elles divergeraient au premier ajout, et
+# c'est la variante la moins souvent relue qui garderait l'ancienne règle.
+CSP = ("default-src 'self'; "
+       "script-src 'self' 'unsafe-inline'; "
+       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "font-src 'self' https://fonts.gstatic.com; "
+       "img-src 'self' data:; "
+       "connect-src 'self'; "
+       "base-uri 'none'; "
+       "form-action 'self'; "
+       "frame-ancestors 'none'")
+
+# L'aperçu local d'EX-PHO-26 passe par `URL.createObjectURL`, donc une URL
+# `blob:`. Sans elle, l'aperçu est bloqué — et silencieusement : une image
+# vide, aucun message. Écart étroit : autorise l'AFFICHAGE d'un fichier déjà
+# choisi par l'invité, aucune exécution. Posé sur la seule route qui en a
+# besoin, jamais globalement.
+CSP_AVEC_BLOB = CSP.replace("img-src 'self' data:",
+                            "img-src 'self' data: blob:")
+assert CSP_AVEC_BLOB != CSP, "la dérivation de la CSP ne mord plus sur `img-src`"
+
+
 @app.middleware("http")
 async def porte_et_entetes(request: Request, appel_suivant):
     chemin = request.url.path
@@ -212,16 +237,7 @@ async def porte_et_entetes(request: Request, appel_suivant):
     # l'injection reste l'échappement Jinja2 (EX-SEC-02), qui est actif.
     # `fonts.googleapis.com` et `fonts.gstatic.com` sont les seules origines
     # tierces restantes ; htmx est servi depuis /static.
-    reponse.headers.setdefault("Content-Security-Policy", (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
-        "img-src 'self' data:; "
-        "connect-src 'self'; "
-        "base-uri 'none'; "
-        "form-action 'self'; "
-        "frame-ancestors 'none'"))
+    reponse.headers.setdefault("Content-Security-Policy", CSP)
     reponse.headers.setdefault("X-Content-Type-Options", "nosniff")
     reponse.headers.setdefault("Referrer-Policy", "same-origin")
     return reponse
@@ -833,7 +849,7 @@ def proposer_bonus(request: Request, identifiant: str):
     if ligne is None:
         raise HTTPException(status_code=404, detail="Introuvable")
     if ligne.etage == 2:
-        return RedirectResponse("/fin", status_code=303)
+        return RedirectResponse(f"/photo/{identifiant}", status_code=303)
     return gabarits.TemplateResponse(
         "bonus_intro.html",
         {"request": request, "p": ligne, "nb_bonus_mot": NB_BONUS_MOT}
@@ -869,6 +885,53 @@ async def enregistrer_bonus(request: Request, identifiant: str):
     bd.ajouter_bonus(identifiant, reponses)
     _lancer_generation(identifiant)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# La photo personnelle (EX-PHO-36 à EX-PHO-38)
+# --------------------------------------------------------------------------- #
+
+def _chronique_ou_404(identifiant: str):
+    ligne = bd.lire(identifiant)
+    if ligne is None:
+        raise HTTPException(status_code=404, detail="Introuvable")
+    return ligne
+
+
+@app.get("/photo/{identifiant}", response_class=HTMLResponse)
+def ecran_photo(request: Request, identifiant: str):
+    ligne = _chronique_ou_404(identifiant)
+    reponse = gabarits.TemplateResponse(
+        "photo.html",
+        {
+            "request": request,
+            "p": ligne,
+            "budget": photos.budget(ligne.personne_uuid),
+            "taille_max": photos.TAILLE_MAX_OCTETS,
+            "action": f"/photo/{identifiant}",
+            "suite": f"/portrait/{identifiant}",
+        },
+    )
+    # `blob:` est indispensable a l'apercu local d'EX-PHO-26 et absent de la
+    # CSP du projet. Ecart etroit, consigne sous EX-SEC-08 : il autorise
+    # l'AFFICHAGE d'un fichier local, aucune execution.
+    reponse.headers["Content-Security-Policy"] = CSP_AVEC_BLOB
+    return reponse
+
+
+@app.post("/photo/{identifiant}")
+async def deposer_photo(identifiant: str, fichier: UploadFile = File(...)):
+    ligne = _chronique_ou_404(identifiant)
+    octets = await fichier.read()
+    try:
+        photo = photos.deposer(ligne.personne_uuid, octets,
+                               est_test=bool(ligne.est_test))
+    except photos.RefusPhoto as refus:
+        # 422 et non 400 : la requete est bien formee, c'est son contenu qui
+        # est refuse. Le message part tel quel a l'invite (EX-AUTH-11).
+        return JSONResponse({"refus": str(refus)}, status_code=422)
+    # EX-PHO-10 — on rend la main tout de suite ; la conversion suit en file.
+    return JSONResponse({"photo": photo.uuid, "etat": photo.etat})
 
 
 @app.get("/fin", response_class=HTMLResponse)

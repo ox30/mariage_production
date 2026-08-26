@@ -348,3 +348,59 @@ assert client.get("/static/../photos_invites/originaux/"
                   f"{depot.uuid}.jpg").status_code in (404, 400)
 
 print("TOUT PASSE — aucune photo n'est atteignable par /static")
+
+
+# --- la station photo est une offre, pas un péage ------------------------- #
+
+# *Défaut constaté en production le 26 août.* Valider son portrait renvoyait
+# vers l'écran de dépôt MÊME après une photo reçue ; le portrait gardant son
+# bouton de validation, on tournait en rond sans autre sortie que « Plus tard ».
+
+boucle = _chronique("Jonas")
+bd.ajouter_bonus(boucle.uuid, {"lien": "Collègue"})
+boucle = bd.lire(boucle.uuid)
+assert boucle.etage == 2
+
+# Sans photo, l'offre est faite.
+saut = client.get(f"/bonus/{boucle.uuid}", follow_redirects=False)
+assert saut.headers["location"] == f"/photo/{boucle.uuid}", saut.headers
+
+# Avec photo, on sort. C'est le tour de boucle qu'on refuse.
+photos.deposer(boucle.personne_uuid, _jpeg())
+sortie = client.get(f"/bonus/{boucle.uuid}", follow_redirects=False)
+assert sortie.headers["location"] == "/fin", \
+    f"la station photo est redevenue un péage : {sortie.headers['location']}"
+
+# Même règle au premier étage, décidée au même endroit : deux endroits qui
+# tranchent séparément la même chose divergent au premier changement.
+premier_etage = _chronique("Katell")
+intro = client.get(f"/bonus/{premier_etage.uuid}").text
+assert f'href="/photo/{premier_etage.uuid}"' in intro
+photos.deposer(premier_etage.personne_uuid, _jpeg())
+intro = client.get(f"/bonus/{premier_etage.uuid}").text
+assert 'href="/fin"' in intro and f'href="/photo/{premier_etage.uuid}"' not in intro
+
+print("TOUT PASSE — la photo déjà reçue ne se redemande pas : la boucle est fermée")
+
+
+# --- l'écran de dépôt dit ce qui est déjà là ------------------------------ #
+
+# Le seul chiffre affiché était celui du bouton — « il vous restera N » —, qui
+# parle du futur et non de ce qui est déjà arrivé.
+vierge = _chronique("Léandre")
+page = _texte(client.get(f"/photo/{vierge.uuid}").text)
+assert "Elle est facultative" in page
+assert "Votre photo est arrivée" not in page
+assert "Plus tard" in page
+
+photos.deposer(vierge.personne_uuid, _jpeg())
+page = client.get(f"/photo/{vierge.uuid}").text
+lu = _texte(page)
+assert "Votre photo est arrivée" in lu, "l'écran ne dit rien de la photo reçue"
+assert "Il vous reste 3 changements" in lu, lu
+# La sortie ne dit plus « Plus tard » quand il n'y a plus rien à remettre.
+assert "Terminer" in lu and "Plus tard" not in lu
+# Et le bouton dit qu'on remplace, pas qu'on valide.
+assert "Remplacer" in _texte(page.split('id="valider"')[1].split("</button>")[0])
+
+print("TOUT PASSE — l'écran de dépôt montre l'état avant le geste")

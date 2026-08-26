@@ -9,12 +9,33 @@
     <p>Vous avez utilisé tous vos changements. Cette photo est la vôtre.</p>
     <a class="action" href="/fin">Continuer</a>
   {% else %}
-    <p>Une photo de vous accompagnera votre chronique. Les mariés la
-       découvriront au moment de vous reconnaître.</p>
-    {# EX-PHO-38 — facultative, et dit comme tel. Exiger la photo exclurait
-       ceux qui refusent d'être photographiés. #}
-    <p class="discret">Elle est facultative : votre chronique tient sans
-       elle.</p>
+    {# L'écran ne disait rien de ce qui était déjà arrivé. L'invité y revenait
+       sans savoir où il en était, et le seul chiffre affiché était celui du
+       bouton — « il vous restera N » —, qui parle du futur et non de ce qui
+       est déjà là. EX-CYC-13 veut le décompte au moment de la décision : le
+       voici avant le geste, et non seulement dessus. #}
+    {% if photo is none %}
+      <p>Une photo de vous accompagnera votre chronique. Les mariés la
+         découvriront au moment de vous reconnaître.</p>
+      {# EX-PHO-38 — facultative, et dit comme tel. Exiger la photo exclurait
+         ceux qui refusent d'être photographiés. #}
+      <p class="discret">Elle est facultative : votre chronique tient sans
+         elle.</p>
+    {% else %}
+      {% if photo.etat == "prete" %}
+        <img class="vignette" src="/photo/{{ p.uuid }}/vignette"
+             alt="Votre photo">
+        <p class="quittance">Voici la photo que le Livre a retenue.</p>
+      {% elif photo.etat == "traitement" %}
+        <p class="quittance"><strong>Votre photo est arrivée.</strong>
+           Le Conseil la prépare encore.</p>
+      {% else %}
+        <p class="alerte"><strong>Votre photo n'a pas pu être préparée.</strong>
+           Reprenez-en une — cela ne vous a rien coûté.</p>
+      {% endif %}
+      <p class="discret">Il vous reste {{ budget.restants }}
+         changement{{ "s" if budget.restants != 1 else "" }}.</p>
+    {% endif %}
 
     {# EX-PHO-08 — deux boutons distincts. Un champ unique est proscrit :
        « Parcourir » n'ouvre pas l'appareil photo sur tous les téléphones. #}
@@ -28,7 +49,7 @@
         <input type="file" accept="image/*" hidden
                id="entree_galerie"></label></p>
       <p class="discret" style="text-align:center">
-        <a href="/fin">Plus tard</a></p>
+        <a href="/fin">{{ "Terminer" if photo else "Plus tard" }}</a></p>
     </div>
 
     {# EX-PHO-26 — deuxième temps. Rien n'est envoyé, rien n'est consommé
@@ -46,7 +67,7 @@
       {# EX-PHO-28 — le décompte est affiché AU MOMENT DE LA DÉCISION, et pas
          seulement dans l'aide (EX-CYC-13). #}
       <button class="action" type="button" id="valider">
-        Valider — il vous restera
+        {{ "Remplacer" if photo else "Valider" }} — il vous restera
         {{ budget.restants - 1 }} changement{{ "s" if budget.restants - 1 != 1 else "" }}
       </button>
       <p style="text-align:center;margin-top:0.6rem">

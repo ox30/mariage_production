@@ -866,16 +866,31 @@ def valider_portrait(identifiant: str):
     return RedirectResponse(f"/bonus/{identifiant}", status_code=303)
 
 
+def _apres_le_portrait(ligne) -> str:
+    """Où l'on va quand l'invité a dit « c'est bien moi ».
+
+    **La station photo est une OFFRE, pas un péage.** Elle ne se propose qu'à
+    qui n'a rien déposé. Sans ce contrôle, valider son portrait renvoyait vers
+    l'écran de dépôt même après une photo reçue — et comme le portrait garde
+    son bouton de validation, on tournait en rond sans autre sortie que
+    « Plus tard ». *Constaté en production le 26 août.*
+    """
+    if photos.courante(ligne.personne_uuid) is not None:
+        return "/fin"
+    return f"/photo/{ligne.uuid}"
+
+
 @app.get("/bonus/{identifiant}", response_class=HTMLResponse)
 def proposer_bonus(request: Request, identifiant: str):
     ligne = bd.lire(identifiant)
     if ligne is None:
         raise HTTPException(status_code=404, detail="Introuvable")
     if ligne.etage == 2:
-        return RedirectResponse(f"/photo/{identifiant}", status_code=303)
+        return RedirectResponse(_apres_le_portrait(ligne), status_code=303)
     return gabarits.TemplateResponse(
         "bonus_intro.html",
-        {"request": request, "p": ligne, "nb_bonus_mot": NB_BONUS_MOT}
+        {"request": request, "p": ligne, "nb_bonus_mot": NB_BONUS_MOT,
+         "sortie": _apres_le_portrait(ligne)}
     )
 
 
@@ -930,6 +945,11 @@ def ecran_photo(request: Request, identifiant: str):
             "request": request,
             "p": ligne,
             "budget": photos.budget(ligne.personne_uuid),
+            # L'écran ne disait rien de la photo déjà reçue : l'invité y
+            # revenait sans savoir où il en était, et le seul décompte visible
+            # était celui du bouton — « il vous restera N », qui parle du
+            # futur, pas de ce qui est déjà là.
+            "photo": photos.courante(ligne.personne_uuid),
             "taille_max": photos.TAILLE_MAX_OCTETS,
             "action": f"/photo/{identifiant}",
             "suite": f"/portrait/{identifiant}",

@@ -301,3 +301,149 @@ for code in main.CODES_LIEUX:
     assert f'value="{code}"' in choix, code
 
 print("TOUT PASSE — le lieu se change avec son effectif sous les yeux")
+
+
+# --- tout champ de formulaire porte un `name` ---------------------------- #
+
+# *Défaut du 27 août :* le champ de dépôt de photo de l'administrateur n'avait
+# pas de `name`. Le navigateur n'envoyait donc RIEN — la galerie s'ouvrait, on
+# validait, la page se rechargeait à l'identique. Mes tests postaient
+# `files={"fichier": …}` directement : ils éprouvaient la ROUTE, jamais le
+# formulaire. Un contrôle structurel sur tous les gabarits, une fois pour
+# toutes.
+
+import pathlib as _pathlib
+
+# Le bon critère est « DANS un formulaire ». Hors formulaire, un champ n'est
+# lu que par le JavaScript et n'a pas à porter de nom — c'est le cas du filtre
+# de la liste des invités et des trois entrées de l'écran photo, qui passent
+# par `FormData`. Dans un formulaire, un champ sans nom est un champ mort.
+# Deux règles, parce qu'elles n'ont pas la même force.
+#
+# 1. **Un `<input type="file">` dans un formulaire DOIT porter un nom.** Sans
+#    exception : on ne peut pas recopier un fichier dans un champ caché, donc
+#    il n'existe aucune raison légitime de l'en priver. C'est le défaut exact
+#    du 27 août.
+# 2. Les autres champs le doivent aussi, **sauf** ceux qui portent un `data-`
+#    et sont pilotés par le JavaScript — convention établie de
+#    `questionnaire.html`, où la valeur visible est recopiée dans un champ
+#    caché nommé (EX-QUE-17).
+sans_nom, fichiers_muets = [], []
+for gabarit in sorted(_pathlib.Path("templates").glob("*.html")):
+    source = gabarit.read_text(encoding="utf-8")
+    for bloc in re.finditer(r"<form\b.*?</form>", source, re.S):
+        for champ in re.finditer(r"<(input|select|textarea)\b[^>]*>",
+                                 bloc.group(0)):
+            balise = champ.group(0)
+            if 'type="submit"' in balise or "name=" in balise:
+                continue
+            if 'type="file"' in balise:
+                fichiers_muets.append(f"{gabarit.name} : {balise[:70]}")
+            elif "data-" not in balise:
+                sans_nom.append(f"{gabarit.name} : {balise[:70]}")
+
+assert not fichiers_muets, (
+    "champ(s) de fichier sans `name` : le navigateur n'enverra rien\n  "
+    + "\n  ".join(fichiers_muets))
+assert not sans_nom, ("champ(s) sans `name` ni `data-` :\n  "
+                      + "\n  ".join(sans_nom))
+
+# La sonde doit pouvoir accuser : le jour où aucun gabarit ne porterait plus de
+# formulaire, elle passerait au vert sans avoir rien examiné.
+formulaires = sum(len(re.findall(r"<form\b", g.read_text(encoding="utf-8")))
+                  for g in _pathlib.Path("templates").glob("*.html"))
+assert formulaires >= 10, f"seulement {formulaires} formulaire(s) examiné(s)"
+
+print("TOUT PASSE — aucun champ de formulaire n'est muet")
+
+
+# --- le peuple se choisit dans une liste close --------------------------- #
+
+# En texte libre, une faute de frappe crée un peuple qui n'existe pas :
+# « naint » est arrivé en production le 27 août.
+bertrand = _chronique("Bertrand")
+fiche = client.get(f"/admin/chronique/{bertrand.uuid}", auth=ADMIN).text
+choix = fiche.split('name="peuple"')[1].split("</select>")[0]
+assert "<input" not in fiche.split('name="peuple"')[0][-40:], \
+    "le peuple est resté un champ libre"
+choix_lu = _texte(choix)
+for peuple in main.CONFIG["peuples"]:
+    # `Corsaire d'Umbar` porte une apostrophe, que Jinja échappe en `&#39;`.
+    # Comparer la chaîne brute au HTML rendu éprouverait l'échappement et non
+    # la présence du peuple.
+    assert f'value="{peuple}"' in choix_lu, peuple
+assert len(main.CONFIG["peuples"]) == 18
+
+# Une valeur déjà en base et hors liste est CONSERVÉE et signalée : l'effacer
+# en silence cacherait peut-être un vrai défaut de génération.
+bd.modifier_chronique(bertrand.uuid, {"peuple": "naint"})
+choix = client.get(f"/admin/chronique/{bertrand.uuid}",
+                   auth=ADMIN).text.split('name="peuple"')[1].split("</select>")[0]
+assert "naint" in choix and "hors liste" in choix, choix[:200]
+
+print("TOUT PASSE — le peuple vient de questions.yaml, hors-liste signalé")
+
+
+# --- corriger les réponses lève un drapeau, sans régénérer --------------- #
+
+celine = _chronique("Céline")
+assert bd.reponses_divergentes(celine.uuid) is False
+en_file_avant = _en_file(celine.uuid)
+
+reponse = client.post(f"/admin/chronique/{celine.uuid}/reponses", auth=ADMIN,
+                      data={"reponse__metier": "cheminote de nuit",
+                            "reponse__allegeance": "La Lumière"})
+assert reponse.status_code == 200
+relu = bd.lire(celine.uuid)
+import json as _j
+assert _j.loads(relu.reponses_json)["metier"] == "cheminote de nuit"
+
+# **Aucune régénération** : deux gestes, pas un.
+assert _en_file(celine.uuid) is en_file_avant or _en_file(celine.uuid) is None
+assert relu.portrait == "Un paragraphe.\n\nUn autre.", "le portrait a bougé"
+
+# Le drapeau est dérivé de deux dates du journal, jamais stocké.
+assert bd.reponses_divergentes(celine.uuid) is True
+assert "ont changé depuis le dernier portrait" in _texte(
+    client.get(f"/admin/chronique/{celine.uuid}", auth=ADMIN).text)
+
+# Corriger le PORTRAIT ne lève pas le drapeau : sinon il serait levé en
+# permanence et on cesserait de le lire.
+denis = _chronique("Denis")
+bd.modifier_chronique(denis.uuid, {"portrait": "Texte retouché."})
+assert bd.reponses_divergentes(denis.uuid) is False
+
+# Et régénérer le baisse.
+with bd.Seance() as seance:
+    bd.journaliser(seance, Journal.CHRONIQUE_GENEREE,
+                   objet_uuid=celine.uuid, objet_type="chronique")
+    seance.commit()
+assert bd.reponses_divergentes(celine.uuid) is False
+
+print("TOUT PASSE — corriger les réponses lève un drapeau et ne régénère rien")
+
+
+# --- vider une réponse du second étage ramène à l'étage un --------------- #
+
+# L'étage se dérive des clés présentes (EX-QUE-11) : il n'y a plus rien du
+# second étage à raconter.
+emile = _chronique("Émile")
+bd.ajouter_bonus(emile.uuid, {"lien": "Collègue"})
+assert bd.lire(emile.uuid).etage == 2
+client.post(f"/admin/chronique/{emile.uuid}/reponses", auth=ADMIN,
+            data={"reponse__lien": ""})
+assert bd.lire(emile.uuid).etage == 1
+assert "lien" not in _j.loads(bd.lire(emile.uuid).reponses_json)
+
+# Un champ hors préfixe ne se mélange pas aux réponses.
+# L'état AVANT l'action, jamais une valeur absolue : `ajouter_bonus` a relancé
+# une génération plus haut, et « == prete » éprouverait cette relance.
+etat_avant = bd.lire(emile.uuid).etat
+cles_avant = set(_j.loads(bd.lire(emile.uuid).reponses_json))
+client.post(f"/admin/chronique/{emile.uuid}/reponses", auth=ADMIN,
+            data={"etat": "echouee", "uuid": "n'importe quoi"})
+relu = bd.lire(emile.uuid)
+assert relu.etat == etat_avant, (etat_avant, relu.etat)
+assert set(_j.loads(relu.reponses_json)) == cles_avant
+
+print("TOUT PASSE — l'étage suit les réponses, et rien ne s'y glisse")

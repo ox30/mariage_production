@@ -73,7 +73,11 @@
      premier au prochain changement de règle. #}
   <label class="action sobre" style="display:inline-block">
     Déposer une photo pour lui
-    <input type="file" accept="image/*" hidden
+    {# `name` MANQUAIT. Sans lui le navigateur n'envoie rien : la route reçoit
+       `fichier=None`, redirige, la page se recharge à l'identique — « ma
+       galerie s'ouvre, je valide, et rien n'arrive ». *Constaté en production
+       le 27 août.* Un champ sans nom est invisible au serveur. #}
+    <input type="file" name="fichier" accept="image/*" hidden
            onchange="this.form.submit()"></label>
   {% if photo %}
     <button class="action sobre" type="submit" name="action" value="retirer"
@@ -105,20 +109,33 @@
 {% endfor %}
 
 <h2>Ce qu'il a répondu</h2>
+{% if divergent %}
+  {# Dérivé de deux dates du journal, jamais stocké. On ne régénère pas tout
+     seul : corriger une réponse et relancer le modèle sont deux gestes, et le
+     second peut ne pas être voulu — on peut préférer retoucher le texte. #}
+  <div class="alerte"><strong>Les réponses ont changé depuis le dernier
+     portrait.</strong> Le texte ci-dessous ne les reflète plus. Régénérez, ou
+     corrigez le portrait à la main.</div>
+{% endif %}
 {% if not reponses %}
   <p class="discret">Aucune réponse enregistrée.</p>
 {% else %}
+<form method="post" action="/admin/chronique/{{ p.uuid }}/reponses">
 <table class="grille">
   <tbody>
   {% for intitule, cle, valeur in reponses %}
     <tr>
       <th style="text-align:left;width:45%">{{ intitule }}
         <br><code class="discret">{{ cle }}</code></th>
-      <td>{{ valeur }}</td>
+      <td><textarea name="reponse__{{ cle }}" rows="2"
+                    style="width:100%">{{ valeur }}</textarea></td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+<button class="action sobre" type="submit">Enregistrer les réponses —
+  sans régénérer</button>
+</form>
 {% endif %}
 
 <h2>Le portrait</h2>
@@ -145,8 +162,25 @@
 <form method="post" action="/admin/chronique/{{ p.uuid }}/modifier">
   <p><label>Nom fictif<br>
     <input type="text" name="nom_fictif" value="{{ p.nom_fictif or '' }}"></label></p>
+  {# Liste close, comme le lieu. En texte libre une faute de frappe crée un
+     peuple qui n'existe pas : « naint » est arrivé en production. La liste
+     vient de `questions.yaml`, référence éditoriale (EX-QUE-12) — elle se
+     corrige jusqu'au 4 septembre sans redéploiement, et le prompt et cet
+     écran ne peuvent pas diverger puisqu'ils lisent la même source. #}
   <p><label>Peuple<br>
-    <input type="text" name="peuple" value="{{ p.peuple or '' }}"></label></p>
+    <select name="peuple">
+      <option value="">— aucun —</option>
+      {% for nom_peuple in peuples %}
+        <option value="{{ nom_peuple }}"
+          {% if nom_peuple == p.peuple %}selected{% endif %}>{{ nom_peuple }}</option>
+      {% endfor %}
+      {% if p.peuple and p.peuple not in peuples %}
+        {# Ce qui est déjà en base ne disparaît pas en silence : on le montre,
+           marqué, pour qu'il se corrige. L'effacer sans le dire cacherait
+           peut-être un vrai défaut de génération. #}
+        <option value="{{ p.peuple }}" selected>{{ p.peuple }} — hors liste</option>
+      {% endif %}
+    </select></label></p>
   <p><label>Lieu — <span class="discret">{{ lieu_affiche }}</span><br>
     <select name="lieu">
       {% for code in codes_lieux %}

@@ -438,6 +438,11 @@ class Journal(_CleUUID, Base):
     # qui a changé : c'est ce qu'on relira en octobre pour savoir si un
     # portrait a été retouché à la main.
     CHRONIQUE_MODIFIEE = "chronique_modifiee"
+    # Distincte de la précédente, et ce n'est pas un détail : c'est la
+    # comparaison de SA date avec celle de la dernière génération qui dit si
+    # le portrait reflète encore les réponses. Noyée dans `CHRONIQUE_MODIFIEE`,
+    # corriger une virgule du portrait lèverait le drapeau.
+    REPONSES_MODIFIEES = "reponses_modifiees"
     CHRONIQUE_SUPPRIMEE = "chronique_supprimee"
     CHRONIQUE_RESTAUREE = "chronique_restauree"
 

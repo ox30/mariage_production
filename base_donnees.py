@@ -1161,3 +1161,67 @@ def supprimer_chronique(identifiant: str, supprimee: bool = True,
                     pour_le_compte_de=par)
         seance.commit()
         return True
+
+
+def modifier_reponses(identifiant: str, valeurs: dict,
+                      par: str = "admin") -> dict:
+    """Corrige les réponses **sans régénérer**.
+
+    Deux gestes séparés, délibérément : corriger une réponse et relancer le
+    modèle ne se veulent pas toujours ensemble. On corrige, on relit, on
+    régénère si l'on veut — ou l'on retouche le portrait à la main.
+
+    Champ par champ, jamais un JSON brut à recopier : `reponses_json` est la
+    seule vérité (`EX-GEN-08`), une réponse perdue est perdue pour toujours, et
+    une accolade oubliée effacerait tout.
+
+    L'étage se dérive des clés présentes (`EX-QUE-11`) : vider la réponse du
+    second étage y ramène la chronique, et c'est cohérent — il n'y a plus rien
+    du second étage à raconter.
+    """
+    changements = {}
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return {}
+        reponses = json.loads(chronique.reponses_json or "{}")
+        for cle, valeur in valeurs.items():
+            nouveau = (valeur or "").strip()
+            ancien = reponses.get(cle, "")
+            if nouveau == ancien:
+                continue
+            changements[cle] = {"avant": ancien, "apres": nouveau}
+            if nouveau:
+                reponses[cle] = nouveau
+            else:
+                reponses.pop(cle, None)
+        if changements:
+            chronique.reponses_json = json.dumps(reponses, ensure_ascii=False)
+            chronique.etage = etage_des_reponses(reponses)
+            journaliser(seance, Journal.REPONSES_MODIFIEES,
+                        objet_uuid=identifiant, objet_type="chronique",
+                        pour_le_compte_de=par, details=changements)
+            seance.commit()
+    return changements
+
+
+def reponses_divergentes(identifiant: str) -> bool:
+    """Les réponses ont-elles bougé depuis le dernier portrait ?
+
+    **Dérivé, jamais stocké** : deux dates du journal comparées. Un drapeau
+    en colonne se désynchroniserait le jour où l'on régénère sans passer par
+    l'écran — et c'est justement le jour où l'on s'y fierait.
+    """
+    with Seance() as seance:
+        modifiees = seance.scalar(
+            select(func.max(Journal.horodatage)).where(
+                Journal.objet_uuid == identifiant,
+                Journal.action == Journal.REPONSES_MODIFIEES))
+        if modifiees is None:
+            return False
+        engendre = seance.scalar(
+            select(func.max(Journal.horodatage)).where(
+                Journal.objet_uuid == identifiant,
+                Journal.action == Journal.CHRONIQUE_GENEREE))
+        # Jamais engendré : il n'y a rien qui puisse diverger.
+        return engendre is not None and modifiees > engendre

@@ -1237,6 +1237,8 @@ def _fiche(ligne) -> dict:
         "max_generations": MAX_GENERATIONS,
         "motifs": CONFIG.get("motifs_reprise", []),
         "codes_lieux": CODES_LIEUX,
+        "peuples": CONFIG.get("peuples", []),
+        "divergent": bd.reponses_divergentes(ligne.uuid),
         # Le lieu découpe les dix chapitres : le déplacer déséquilibre la
         # répartition. L'effectif est montré À CÔTÉ du champ, sinon la
         # conséquence ne se découvre qu'en octobre.
@@ -1346,6 +1348,23 @@ async def admin_modifier_chronique(request: Request, identifiant: str,
     ligne = _chronique_ou_404(identifiant)
     donnees = await request.form()
     bd.modifier_chronique(identifiant, dict(donnees))
+    return _retour_fiche(ligne)
+
+
+@app.post("/admin/chronique/{identifiant}/reponses")
+async def admin_modifier_reponses(request: Request, identifiant: str,
+                                  _: str = Depends(admin)):
+    """Corrige les réponses. **Ne régénère pas** — c'est le geste suivant.
+
+    Les champs arrivent préfixés `reponse__` : sans préfixe, un champ nommé
+    `etat` ou `uuid` glissé dans le formulaire irait se mélanger aux réponses.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    donnees = await request.form()
+    valeurs = {cle[len("reponse__"):]: valeur
+               for cle, valeur in donnees.items()
+               if cle.startswith("reponse__")}
+    bd.modifier_reponses(identifiant, valeurs)
     return _retour_fiche(ligne)
 
 

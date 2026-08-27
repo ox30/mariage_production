@@ -42,7 +42,7 @@
   {# Les fichiers vivent sur le VOLUME et se servent derrière
      MOT_DE_PASSE_ADMIN, jamais par /static qui est monté publiquement. #}
   {% if photo.chemin_vignette %}
-    <img class="apercu-admin" src="/admin/photo/{{ p.uuid }}/vignettes"
+    <img class="apercu-admin" src="/admin/photo/{{ p.uuid }}/vignettes?v={{ photo.uuid[:12] }}"
          alt="Photo de {{ p.prenom }}">
   {% elif photo.etat == "traitement" %}
     <p class="vigilance">Reçue, pas encore convertie — aucune vignette à

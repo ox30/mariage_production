@@ -297,7 +297,7 @@ with bd.Seance() as seance:
     ligne_photo.chemin_vignette = f"{depot.uuid}.jpg"
     seance.commit()
 page = client.get(f"/portrait/{quittance.uuid}").text
-assert f'src="/photo/{quittance.uuid}/vignette"' in page, page[-600:]
+assert f'src="/photo/{quittance.uuid}/vignette?v=' in page, page[-600:]
 assert "/static/" not in page.split('class="vignette"')[1][:200]
 
 # Le fichier n'existe pas encore (la conversion arrive en B2) : 404 franc,

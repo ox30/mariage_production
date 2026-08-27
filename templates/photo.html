@@ -23,7 +23,7 @@
          elle.</p>
     {% else %}
       {% if photo.etat == "prete" %}
-        <img class="vignette" src="/photo/{{ p.uuid }}/vignette"
+        <img class="vignette" src="/photo/{{ p.uuid }}/vignette?v={{ photo.uuid[:12] }}"
              alt="Votre photo">
         <p class="quittance">Voici la photo que le Livre a retenue.</p>
       {% elif photo.etat == "traitement" %}

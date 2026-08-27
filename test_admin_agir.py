@@ -18,6 +18,7 @@ from PIL import Image
 from sqlalchemy import select
 
 import base_donnees as bd
+import config
 import main
 import photos
 import test_outils
@@ -447,3 +448,122 @@ assert relu.etat == etat_avant, (etat_avant, relu.etat)
 assert set(_j.loads(relu.reponses_json)) == cles_avant
 
 print("TOUT PASSE — l'étage suit les réponses, et rien ne s'y glisse")
+
+
+# --- l'URL d'une photo change quand la photo change ---------------------- #
+
+# *Défaut du 27 août :* l'URL porte l'UUID de la CHRONIQUE, pas celui du
+# fichier. Identique avant et après un remplacement, le navigateur réaffichait
+# la précédente — contourné au Ctrl+F5.
+
+felix = _chronique("Félix")
+premiere = photos.deposer(felix.personne_uuid, _img())
+with bd.Seance() as seance:
+    ligne = seance.get(Photo, premiere.uuid)
+    ligne.etat, ligne.chemin_vignette = "prete", f"{premiere.uuid}.jpg"
+    seance.commit()
+
+def _source_vignette(page):
+    trouve = re.search(r'src="(/(?:admin/)?photo/[^"]+)"', page)
+    assert trouve, "aucune vignette dans la page"
+    return trouve.group(1)
+
+avant_url = _source_vignette(client.get(f"/portrait/{felix.uuid}").text)
+assert "?v=" in avant_url, avant_url
+
+seconde = photos.deposer(felix.personne_uuid, _img(1000, 750))
+with bd.Seance() as seance:
+    ligne = seance.get(Photo, seconde.uuid)
+    ligne.etat, ligne.chemin_vignette = "prete", f"{seconde.uuid}.jpg"
+    seance.commit()
+apres_url = _source_vignette(client.get(f"/portrait/{felix.uuid}").text)
+assert apres_url != avant_url, \
+    f"l'URL n'a pas bougé après remplacement : {apres_url}"
+
+# La fiche d'administration porte la même empreinte.
+fiche_url = _source_vignette(
+    client.get(f"/admin/chronique/{felix.uuid}", auth=ADMIN).text)
+assert "?v=" in fiche_url, fiche_url
+
+# Et l'en-tête autorise le cache, ce que seule l'empreinte rend sans danger.
+vignettes = config.projet().dossier_medias / "photos_invites" / "vignettes"
+vignettes.mkdir(parents=True, exist_ok=True)
+(vignettes / f"{seconde.uuid}.jpg").write_bytes(_img())
+servie = client.get(f"/photo/{felix.uuid}/vignette")
+assert servie.status_code == 200
+assert "private" in servie.headers.get("cache-control", ""), servie.headers
+
+print("TOUT PASSE — l'URL d'une photo porte son empreinte")
+
+
+# --- retoucher le personnage à la main baisse le drapeau ----------------- #
+
+gaelle = _chronique("Gaëlle")
+with bd.Seance() as seance:
+    bd.journaliser(seance, Journal.CHRONIQUE_GENEREE,
+                   objet_uuid=gaelle.uuid, objet_type="chronique")
+    seance.commit()
+client.post(f"/admin/chronique/{gaelle.uuid}/reponses", auth=ADMIN,
+            data={"reponse__metier": "veilleur de nuit"})
+assert bd.reponses_divergentes(gaelle.uuid) is True
+
+# Corriger le portrait à la main, c'est mettre le portrait en accord soi-même.
+bd.modifier_chronique(gaelle.uuid, {"portrait": "Texte remis en accord."})
+assert bd.reponses_divergentes(gaelle.uuid) is False, \
+    "retoucher le portrait n'a pas baissé le drapeau"
+
+# Le nom, le peuple et l'indice comptent aussi.
+for champ, valeur in (("nom_fictif", "Gaëlle la Veilleuse"),
+                      ("peuple", "elfe"), ("indice", "Autre indice.")):
+    client.post(f"/admin/chronique/{gaelle.uuid}/reponses", auth=ADMIN,
+                data={"reponse__metier": f"veilleur — {champ}"})
+    assert bd.reponses_divergentes(gaelle.uuid) is True, champ
+    bd.modifier_chronique(gaelle.uuid, {champ: valeur})
+    assert bd.reponses_divergentes(gaelle.uuid) is False, champ
+
+# **Le lieu, non** : il n'est pas dérivé des réponses, il est assigné.
+client.post(f"/admin/chronique/{gaelle.uuid}/reponses", auth=ADMIN,
+            data={"reponse__metier": "veilleur des quais"})
+bd.modifier_chronique(gaelle.uuid, {"lieu": main.CODES_LIEUX[2]})
+assert bd.reponses_divergentes(gaelle.uuid) is True, \
+    "changer le lieu a fait taire un drapeau qu'il ne concerne pas"
+
+# Un enregistrement qui ne change RIEN ne baisse rien non plus.
+bd.modifier_chronique(gaelle.uuid, {"portrait": bd.lire(gaelle.uuid).portrait})
+assert bd.reponses_divergentes(gaelle.uuid) is True
+
+print("TOUT PASSE — retoucher le personnage baisse le drapeau, pas le lieu")
+
+
+# --- une réponse qui n'atteint pas le modèle ne périme rien -------------- #
+
+# « Que souhaites-tu aux mariés » est montré tel quel aux mariés (usage
+# `revelation`) et n'entre jamais dans le prompt : la modifier ne change pas le
+# personnage, donc ne périme pas son portrait.
+assert "souhait" in bd.CLES_HORS_PORTRAIT, bd.CLES_HORS_PORTRAIT
+assert "destin" in bd.CLES_HORS_PORTRAIT      # usage `chapitre`
+assert "metier" not in bd.CLES_HORS_PORTRAIT
+# Dérivé de questions.yaml, jamais écrit en dur.
+assert bd.CLES_HORS_PORTRAIT == {
+    q["cle"] for bloc in ("obligatoires", "bonus") for q in main.CONFIG[bloc]
+    if q.get("usage", "portrait") in ("revelation", "chapitre")}
+
+hugues = _chronique("Hugues")
+with bd.Seance() as seance:
+    bd.journaliser(seance, Journal.CHRONIQUE_GENEREE,
+                   objet_uuid=hugues.uuid, objet_type="chronique")
+    seance.commit()
+client.post(f"/admin/chronique/{hugues.uuid}/reponses", auth=ADMIN,
+            data={"reponse__souhait": "Une vie longue et douce."})
+assert _j.loads(bd.lire(hugues.uuid).reponses_json)["souhait"] \
+    == "Une vie longue et douce.", "la réponse n'a pas été enregistrée"
+assert bd.reponses_divergentes(hugues.uuid) is False, \
+    "modifier le vœu aux mariés a levé le drapeau à tort"
+
+# Mais mélangée à une réponse qui compte, elle ne masque rien.
+client.post(f"/admin/chronique/{hugues.uuid}/reponses", auth=ADMIN,
+            data={"reponse__souhait": "Encore autre chose.",
+                  "reponse__objet": "une lanterne"})
+assert bd.reponses_divergentes(hugues.uuid) is True
+
+print("TOUT PASSE — le vœu aux mariés ne périme pas le portrait")

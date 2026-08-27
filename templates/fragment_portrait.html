@@ -89,7 +89,7 @@
     {% endif %}
 
   {% elif photo.etat == "prete" %}
-    <img class="vignette" src="/photo/{{ p.uuid }}/vignette" alt="Votre photo">
+    <img class="vignette" src="/photo/{{ p.uuid }}/vignette?v={{ photo.uuid[:12] }}" alt="Votre photo">
     <p class="discret">Il vous reste {{ budget_photo.restants }}
        changement{{ "s" if budget_photo.restants != 1 else "" }}.</p>
     {% if not budget_photo.epuise %}

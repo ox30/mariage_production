@@ -837,6 +837,9 @@ CLES_SECOND_ETAGE: set[str] = set()
 # Semé par `main` au démarrage, comme `CLES_SECOND_ETAGE` : `base_donnees` ne
 # lit pas `questions.yaml`, c'est `main` qui déclare ce qu'il sait.
 CODES_LIEUX_CONNUS: list[str] = []
+# Les clés dont la modification ne périme PAS un portrait : elles n'atteignent
+# jamais le modèle. Semé par `main` depuis `questions.yaml`.
+CLES_HORS_PORTRAIT: set[str] = set()
 
 
 def etage_des_reponses(reponses: dict) -> int:
@@ -1205,23 +1208,89 @@ def modifier_reponses(identifiant: str, valeurs: dict,
     return changements
 
 
-def reponses_divergentes(identifiant: str) -> bool:
-    """Les réponses ont-elles bougé depuis le dernier portrait ?
+# Ce qui, retouché à la main, remet le portrait en accord avec les réponses.
+# `lieu` n'y est pas : il n'est pas dérivé des réponses, il est assigné.
+CHAMPS_DU_PERSONNAGE = ("nom_fictif", "peuple", "portrait", "indice")
 
-    **Dérivé, jamais stocké** : deux dates du journal comparées. Un drapeau
-    en colonne se désynchroniserait le jour où l'on régénère sans passer par
+
+def _lignes(seance: Session, identifiant: str, action: str) -> list:
+    return list(seance.scalars(
+        select(Journal).where(Journal.objet_uuid == identifiant,
+                              Journal.action == action)))
+
+
+def _dernier_touchant(lignes: list, champs) -> object | None:
+    """Horodatage de la dernière ligne dont le détail touche l'un des champs.
+
+    Le filtrage se fait en mémoire et non en SQL : les détails sont du JSON,
+    et il y a au plus quelques lignes par chronique. Une requête qui fouille
+    du JSON serait illisible pour épargner trois comparaisons.
+    """
+    dernier = None
+    for ligne in lignes:
+        try:
+            details = json.loads(ligne.details_json or "{}")
+        except ValueError:
+            continue
+        if not any(champ in details for champ in champs):
+            continue
+        if dernier is None or ligne.horodatage > dernier:
+            dernier = ligne.horodatage
+    return dernier
+
+
+def reponses_divergentes(identifiant: str) -> bool:
+    """Le portrait reflète-t-il encore les réponses ?
+
+    **Dérivé, jamais stocké** : trois dates du journal comparées. Un drapeau en
+    colonne se désynchroniserait le jour où l'on régénère sans passer par
     l'écran — et c'est justement le jour où l'on s'y fierait.
+
+    Trois règles, chacune pour une raison distincte :
+
+    1. Seule compte la modification d'une réponse **qui alimente le modèle**.
+       Changer « que souhaites-tu aux mariés » ne périme rien : cette réponse
+       est montrée telle quelle aux mariés et n'atteint jamais le portrait
+       (`CLES_HORS_PORTRAIT`, dérivé de `questions.yaml`).
+    2. Régénérer remet en accord.
+    3. **Retoucher le personnage à la main aussi.** Corriger le texte, le nom
+       ou le peuple, c'est mettre le portrait en accord soi-même — le drapeau
+       n'a plus rien à signaler. Modifier le seul `lieu` ne compte pas : il ne
+       vient pas des réponses.
     """
     with Seance() as seance:
-        modifiees = seance.scalar(
-            select(func.max(Journal.horodatage)).where(
-                Journal.objet_uuid == identifiant,
-                Journal.action == Journal.REPONSES_MODIFIEES))
+        modifiees = _dernier_touchant(
+            _lignes(seance, identifiant, Journal.REPONSES_MODIFIEES),
+            [c for c in _toutes_les_cles(seance, identifiant)
+             if c not in CLES_HORS_PORTRAIT])
         if modifiees is None:
             return False
         engendre = seance.scalar(
             select(func.max(Journal.horodatage)).where(
                 Journal.objet_uuid == identifiant,
                 Journal.action == Journal.CHRONIQUE_GENEREE))
-        # Jamais engendré : il n'y a rien qui puisse diverger.
-        return engendre is not None and modifiees > engendre
+        retouche = _dernier_touchant(
+            _lignes(seance, identifiant, Journal.CHRONIQUE_MODIFIEE),
+            CHAMPS_DU_PERSONNAGE)
+        alignement = max([d for d in (engendre, retouche) if d is not None],
+                         default=None)
+        # Jamais engendré ni retouché : il n'y a pas de portrait à périmer.
+        return alignement is not None and modifiees > alignement
+
+
+def _toutes_les_cles(seance: Session, identifiant: str) -> set[str]:
+    """Les clés connues : celles des réponses, plus celles déjà retirées.
+
+    Une clé effacée doit compter comme un changement — vider « métier » périme
+    le portrait autant que le réécrire.
+    """
+    connues = set(CLES_HORS_PORTRAIT)
+    chronique = seance.get(Chronique, identifiant)
+    if chronique is not None:
+        connues |= set(json.loads(chronique.reponses_json or "{}"))
+    for ligne in _lignes(seance, identifiant, Journal.REPONSES_MODIFIEES):
+        try:
+            connues |= set(json.loads(ligne.details_json or "{}"))
+        except ValueError:
+            pass
+    return connues

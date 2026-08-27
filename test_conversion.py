@@ -237,7 +237,7 @@ print("TOUT PASSE — convertir une photo remplacée ne la ressuscite pas")
 # --- l'invité voit enfin sa vignette -------------------------------------- #
 
 vue = client.get(f"/portrait/{marc.uuid}").text
-assert f'src="/photo/{marc.uuid}/vignette"' in vue
+assert f'src="/photo/{marc.uuid}/vignette?v=' in vue
 servie = client.get(f"/photo/{marc.uuid}/vignette")
 assert servie.status_code == 200
 assert servie.content == _fichier("vignettes", f"{photo.uuid}.jpg").read_bytes()

@@ -201,6 +201,15 @@ def _hors_porte(chemin: str) -> bool:
 # EX-SEC-08 — une seule source pour la CSP. `CSP_AVEC_BLOB` s'en DÉRIVE :
 # écrites à la main toutes les deux, elles divergeraient au premier ajout, et
 # c'est la variante la moins souvent relue qui garderait l'ancienne règle.
+# L'URL d'une photo porte l'UUID de la CHRONIQUE, pas celui du fichier : elle
+# est donc identique avant et après un remplacement, et le navigateur réaffiche
+# celle qu'il a déjà — « je change la photo, l'ancienne revient ».
+# *Constaté en production le 27 août.* Le gabarit ajoute `?v=<empreinte>` ;
+# l'URL change alors à chaque dépôt, et l'on peut garder longtemps sans jamais
+# montrer l'ancienne. Même remède que `style.css?v=…`.
+# `private` : une photo d'invité n'a rien à faire dans un cache partagé.
+EN_TETES_PHOTO = {"Cache-Control": "private, max-age=604800"}
+
 CSP = ("default-src 'self'; "
        "script-src 'self' 'unsafe-inline'; "
        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
@@ -344,6 +353,14 @@ gabarits.env.globals["empreinte_htmx"] = config.empreinte(
 # à relire questions.yaml pour savoir lesquelles relèvent du second étage.
 bd.CLES_SECOND_ETAGE = {q["cle"] for q in CONFIG["bonus"]}
 bd.CODES_LIEUX_CONNUS = list(CODES_LIEUX)
+# Même règle qu'`ia.py` : `revelation` est montré tel quel aux mariés,
+# `chapitre` dort en base jusqu'à l'écriture des chapitres. Ni l'un ni l'autre
+# ne part au modèle — donc ni l'un ni l'autre ne peut périmer un portrait.
+# Dérivé de `questions.yaml` et non écrit en dur : « souhait » y est marqué,
+# et une question ajoutée demain suivra sans qu'on y pense.
+bd.CLES_HORS_PORTRAIT = {
+    q["cle"] for bloc in ("obligatoires", "bonus") for q in CONFIG[bloc]
+    if q.get("usage", "portrait") in ("revelation", "chapitre")}
 
 # Les libellés annonçant « N questions de plus » sont dérivés de la
 # configuration : déplacer une question d'un étage à l'autre ne doit jamais
@@ -1013,7 +1030,8 @@ def vignette_photo(identifiant: str):
               / photo.chemin_vignette)
     if not chemin.is_file():
         raise HTTPException(status_code=404, detail="Aucune vignette")
-    return FileResponse(chemin, media_type="image/jpeg")
+    return FileResponse(chemin, media_type="image/jpeg",
+                        headers=EN_TETES_PHOTO)
 
 
 @app.get("/fin", response_class=HTMLResponse)
@@ -1438,7 +1456,7 @@ def admin_photo_fichier(identifiant: str, variante: str,
     chemin = config.projet().dossier_medias / "photos_invites" / variante / relatif
     if not chemin.is_file():
         raise HTTPException(status_code=404, detail="Aucun fichier")
-    return FileResponse(chemin)
+    return FileResponse(chemin, headers=EN_TETES_PHOTO)
 
 
 @app.get("/tableau")

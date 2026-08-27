@@ -40,6 +40,10 @@
       <span class="etiquette">en conversion</span></div>
     <div><span class="valeur chiffre">{{ photos.echouee }}</span>
       <span class="etiquette">photos en échec</span></div>
+    {# Ce chiffre doit être à ZÉRO avant la bascule : une photo qui n'existe
+       que sur le volume disparaît avec lui, et aucun instantané ne la porte. #}
+    <div><span class="valeur chiffre{% if photos.hors_volume %} alerte{% endif %}">{{ photos.hors_volume }}</span>
+      <span class="etiquette">photos hors du stockage objet</span></div>
     <div><span class="valeur chiffre">{{ fuites }}</span>
          <span class="etiquette">fuites de noms</span></div>
   </div>

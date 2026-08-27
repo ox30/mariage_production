@@ -150,6 +150,12 @@ async def cycle_de_vie(_: FastAPI):
     if reprises:
         print(f"photos          : {reprises} conversion(s) perdue(s) remise(s) "
               "en file", flush=True)
+    # Couvre un dépôt objet indisponible toute une soirée, et les photos
+    # déposées avant que la copie n'existe.
+    a_copier = photos.reprendre_copies_manquantes()
+    if a_copier:
+        print(f"photos          : {a_copier} copie(s) vers le stockage objet "
+              "remise(s) en file", flush=True)
     fils = taches.demarrer()
     # « 16 démarrés, limite 8 » se lisait comme une incohérence — trois
     # relectures pour comprendre que les fils au-delà de la limite dorment.
@@ -449,6 +455,11 @@ taches.enregistrer_traitant("generation_chronique", _generer_chronique)
 # préparation » pour toujours — et le crédit n'est jamais rendu (EX-PHO-33).
 taches.enregistrer_traitant("conversion_image", photos.convertir,
                             sur_echec=photos.marquer_echec)
+# Pas de `sur_echec` ici, et c'est délibéré : une copie qui échoue ne change
+# RIEN à la photo. Elle est sur le volume, elle s'affiche, l'invité n'a rien à
+# savoir. C'est un défaut de sauvegarde, et c'est au tableau de bord de le dire
+# à celui qui peut y remédier.
+taches.enregistrer_traitant("copie_stockage_objet", photos.copier)
 
 
 def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
@@ -1612,6 +1623,14 @@ def _decompte_photos(lignes) -> dict:
             etats[photo.etat] = etats.get(photo.etat, 0) + 1
     etats["recues"] = sum(etats[e] for e in ("prete", "traitement", "echouee"))
     etats["sans"] = sans
+    # EX-SAU-01 — combien de photos n'existent QUE sur le volume. C'est le seul
+    # chiffre de sauvegarde qui ne se lit nulle part ailleurs : les instantanés
+    # portent les chroniques, jamais les fichiers.
+    deja = photos.copiees()
+    etats["copiees"] = sum(1 for l in lignes
+                           if (p := photos.courante(l.personne_uuid))
+                           and p.uuid in deja)
+    etats["hors_volume"] = etats["prete"] - etats["copiees"]
     return etats
 
 

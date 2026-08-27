@@ -423,6 +423,12 @@ class Journal(_CleUUID, Base):
     PHOTO_DEPOSEE = "photo_deposee"
     PHOTO_ECHOUEE = "photo_echouee"
     PHOTO_RETIREE = "photo_retiree"
+    # EX-SAU-01 — la photo est copiée hors du volume. Journalisée pour que la
+    # question « laquelle n'est pas sauvegardée ? » se DÉRIVE au lieu d'exiger
+    # d'interroger deux fournisseurs, ce qui est lent et faux dès qu'un des
+    # deux ne répond pas.
+    PHOTO_COPIEE = "photo_copiee"
+    PHOTO_COPIE_ECHOUEE = "photo_copie_echouee"
     # EX-ADM-10 — l'administrateur rend un crédit, ou les rend tous.
     # **Rendre UN crédit est une quantité ; tout rendre est une DATE.** Écrire
     # quatre lignes de compensation marcherait — mais un double appui sur un

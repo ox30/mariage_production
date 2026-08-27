@@ -37,6 +37,7 @@ from sqlalchemy import func, select
 
 import base_donnees as bd
 import config
+import depot_objet
 import taches
 from modeles import Journal, Photo
 
@@ -375,6 +376,13 @@ def convertir(photo_uuid: str) -> None:
         photo.etat = "prete"
         seance.commit()
 
+    # EX-SAU-01 — la copie part UNE fois la conversion faite : plus tôt, il n'y
+    # aurait qu'un original à déposer, et il faudrait repasser sur les deux
+    # fournisseurs pour les deux dérivés. Elle est en file séparée et de plus
+    # basse priorité : une photo lente à sauvegarder ne doit pas retarder la
+    # conversion de la suivante, que l'invité, lui, attend.
+    taches.mettre_en_file("copie_stockage_objet", photo_uuid)
+
 
 def marquer_echec(photo_uuid: str, erreur: str) -> None:
     """Crochet d'échec définitif de `conversion_image`.
@@ -495,3 +503,118 @@ def deposer_pour(personne_uuid: str, octets: bytes, par: str = "admin",
                                 "photo": photo.uuid})
         seance.commit()
     return photo
+
+
+# --------------------------------------------------------------------------- #
+# La copie hors du volume (EX-SAU-01)
+# --------------------------------------------------------------------------- #
+
+# Ce qu'on copie, et dans quel ordre d'importance. L'original d'abord : c'est
+# le seul irremplaçable — le web et la vignette se reconstruisent à partir de
+# lui, alors que lui ne se reconstruit de rien.
+VARIANTES_COPIEES = ("originaux", "web", "vignettes")
+
+
+def _a_copier(photo: Photo) -> list[tuple[str, str]]:
+    chemins = {"originaux": photo.chemin_original, "web": photo.chemin_web,
+               "vignettes": photo.chemin_vignette}
+    return [(v, chemins[v]) for v in VARIANTES_COPIEES if chemins[v]]
+
+
+def copier(photo_uuid: str) -> None:
+    """Dépose les trois fichiers sur les deux stockages. Traitant de
+    `copie_stockage_objet`.
+
+    **La copie ne touche jamais l'état de la photo.** Un dépôt objet
+    indisponible est un défaut de sauvegarde, pas un défaut de photo : l'invité
+    n'a rien à savoir, et sa chronique s'affiche exactement pareil. C'est le
+    tableau de bord qui doit le dire, à celui qui peut y remédier.
+
+    Le préfixe vient de `depot_objet.prefixe_projet()`, donc de
+    `projet-actif.txt` — jamais tapé à la main. C'est ce qui a manqué le jour
+    où des sauvegardes sont parties dans un préfixe orphelin.
+    """
+    with bd.Seance() as seance:
+        photo = seance.get(Photo, photo_uuid)
+        if photo is None:
+            raise taches.EchecDefinitif(f"photo {photo_uuid} introuvable")
+        fichiers = _a_copier(photo)
+        est_test = bool(photo.est_test)
+
+    if not depot_objet.depots_actifs():
+        # Aucune destination configurée : ce n'est pas un échec, c'est un
+        # projet de développement. Échouer ici remplirait la file de rouge
+        # sur un poste où il n'y a rien à sauvegarder.
+        return
+    if not fichiers:
+        raise taches.EchecDefinitif("aucun fichier à copier")
+
+    manques, deposes = [], 0
+    for variante, relatif in fichiers:
+        source = _dossier(variante) / relatif
+        if not source.is_file():
+            manques.append(f"{variante}/{relatif} absent du volume")
+            continue
+        resultats = depot_objet.deposer_partout(
+            f"photos/{variante}/{relatif}", source.read_bytes())
+        for r in resultats:
+            if r.succes:
+                deposes += 1
+            else:
+                manques.append(f"{variante} → {r.destination} : {r.erreur}")
+
+    with bd.Seance() as seance:
+        bd.journaliser(
+            seance,
+            Journal.PHOTO_COPIEE if not manques else Journal.PHOTO_COPIE_ECHOUEE,
+            objet_uuid=photo_uuid, objet_type="photo",
+            details={"fichiers": len(fichiers), "depots": deposes,
+                     "test": est_test,
+                     **({"manques": manques[:6]} if manques else {})})
+        seance.commit()
+
+    if manques:
+        # Temporaire, jamais définitif : un fournisseur qui ne répond pas
+        # maintenant répondra peut-être dans quatre secondes, et la photo est
+        # toujours sur le volume en attendant.
+        raise taches.EchecTemporaire(" · ".join(manques[:3]))
+
+
+def copiees() -> set[str]:
+    """Les photos dont la copie a réussi au moins une fois.
+
+    Dérivé du journal (`EX-GEN-07`) : interroger les deux fournisseurs à chaque
+    affichage serait lent, et faux dès que l'un des deux ne répond pas.
+    """
+    with bd.Seance() as seance:
+        return set(seance.scalars(
+            select(Journal.objet_uuid).where(
+                Journal.action == Journal.PHOTO_COPIEE)))
+
+
+def reprendre_copies_manquantes() -> int:
+    """Met en file la copie des photos prêtes qui n'ont jamais été copiées.
+
+    Même raisonnement que `reprendre_conversions_perdues` : couvre le
+    redémarrage en plein travail, un dépôt objet indisponible toute la soirée,
+    et les photos déposées avant que la copie n'existe. Ne boucle pas — une
+    copie réussie sort la photo de la requête.
+    """
+    if not depot_objet.depots_actifs():
+        return 0
+    from modeles import Tache
+
+    deja = copiees()
+    with bd.Seance() as seance:
+        vivantes = set(seance.scalars(
+            select(Tache.objet_uuid).where(
+                Tache.type == "copie_stockage_objet",
+                Tache.etat.in_(("en_attente", "en_cours")))))
+        manquantes = [p.uuid for p in seance.scalars(
+            select(Photo).where(Photo.etat == "prete",
+                                Photo.supprimee.is_(False)))
+            if p.uuid not in deja and p.uuid not in vivantes]
+
+    for identifiant in manquantes:
+        taches.mettre_en_file("copie_stockage_objet", identifiant)
+    return len(manquantes)

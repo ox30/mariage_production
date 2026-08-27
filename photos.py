@@ -99,10 +99,13 @@ class Budget:
     deposes: int
     echecs: int
     maximum: int
+    rendus: int = 0
 
     @property
     def consommes(self) -> int:
-        return self.deposes - self.echecs
+        # Jamais négatif : rendre plus de crédits qu'il n'y a eu de dépôts est
+        # légitime, et ne doit pas offrir de dépôts supplémentaires.
+        return max(0, self.deposes - self.echecs - self.rendus)
 
     @property
     def restants(self) -> int:
@@ -120,12 +123,13 @@ def maximum_depots() -> int:
     return int(depots) + int(modifs)
 
 
-def _compter(seance, personne_uuid: str, action: str) -> int:
-    return seance.scalar(
-        select(func.count()).select_from(Journal)
-        .where(Journal.acteur_personne_uuid == personne_uuid,
-               Journal.action == action)
-    ) or 0
+def _compter(seance, personne_uuid: str, action: str, depuis=None) -> int:
+    requete = (select(func.count()).select_from(Journal)
+               .where(Journal.acteur_personne_uuid == personne_uuid,
+                      Journal.action == action))
+    if depuis is not None:
+        requete = requete.where(Journal.horodatage > depuis)
+    return seance.scalar(requete) or 0
 
 
 def budget(personne_uuid: str) -> Budget:
@@ -134,9 +138,20 @@ def budget(personne_uuid: str) -> Budget:
 
 
 def _budget(seance, personne_uuid: str) -> Budget:
+    """Tout se recompte depuis la dernière remise à zéro.
+
+    Trois termes, deux en soustraction : ce que l'invité a déposé, moins ce que
+    NOUS avons raté (EX-PHO-33), moins ce que l'administrateur a rendu
+    (EX-ADM-10). Aucun compteur en base — c'est la sixième grandeur du projet à
+    suivre la règle.
+    """
+    depuis = bd.borne_de_remise(seance, personne_uuid,
+                                Journal.PHOTO_CREDITS_REMIS,
+                                colonne=Journal.acteur_personne_uuid)
     return Budget(
-        deposes=_compter(seance, personne_uuid, Journal.PHOTO_DEPOSEE),
-        echecs=_compter(seance, personne_uuid, Journal.PHOTO_ECHOUEE),
+        deposes=_compter(seance, personne_uuid, Journal.PHOTO_DEPOSEE, depuis),
+        echecs=_compter(seance, personne_uuid, Journal.PHOTO_ECHOUEE, depuis),
+        rendus=_compter(seance, personne_uuid, Journal.PHOTO_CREDITEE, depuis),
         maximum=maximum_depots(),
     )
 
@@ -186,7 +201,8 @@ def verifier(octets: bytes) -> str:
     return forme
 
 
-def deposer(personne_uuid: str, octets: bytes, est_test: bool = False) -> Photo:
+def deposer(personne_uuid: str, octets: bytes, est_test: bool = False,
+            sans_consommer: bool = False) -> Photo:
     """Écrit l'original, journalise, met la conversion en file. Rend la main.
 
     `EX-PHO-10` — l'application répond immédiatement. La conversion, le
@@ -197,7 +213,11 @@ def deposer(personne_uuid: str, octets: bytes, est_test: bool = False) -> Photo:
 
     with bd.Seance() as seance:
         etat_budget = _budget(seance, personne_uuid)
-        if etat_budget.epuise:
+        # EX-ADM-10 — l'administrateur agit sans limite. Il passe par la MÊME
+        # fonction : un second chemin de dépôt divergerait du premier au
+        # prochain changement de règle, et c'est celui qu'on relit le moins
+        # qui garderait l'ancienne.
+        if etat_budget.epuise and not sans_consommer:
             raise RefusPhoto(
                 "Vous avez utilisé tous vos changements de photo. "
                 "Celle-ci est la vôtre.")
@@ -407,3 +427,71 @@ def reprendre_conversions_perdues() -> int:
     for identifiant in identifiants:
         taches.mettre_en_file("conversion_image", identifiant)
     return len(identifiants)
+
+
+# --------------------------------------------------------------------------- #
+# Ce que l'administrateur peut faire (EX-ADM-10, EX-ADM-11)
+# --------------------------------------------------------------------------- #
+
+def crediter(personne_uuid: str, tout: bool = False,
+             par: str = "admin") -> Budget:
+    """Rend un crédit de photo, ou les rend tous.
+
+    **Un crédit est une quantité, tout rendre est une date.** La borne est
+    idempotente : deux appuis en posent deux, la dernière gagne, le résultat
+    est identique. Des lignes de compensation, elles, s'additionneraient — et
+    un double appui sur un réseau lent offrirait huit dépôts au lieu de quatre.
+    """
+    with bd.Seance() as seance:
+        bd.journaliser(
+            seance,
+            Journal.PHOTO_CREDITS_REMIS if tout else Journal.PHOTO_CREDITEE,
+            objet_uuid=personne_uuid, objet_type="personne",
+            acteur=personne_uuid, pour_le_compte_de=par)
+        seance.commit()
+    return budget(personne_uuid)
+
+
+def retirer(photo_uuid: str, par: str | None = None) -> bool:
+    """Suppression douce (`EX-GEN-03`) : la ligne se marque, le fichier reste.
+
+    **Ne débite rien.** `EX-PHO-37` compte les *modifications*, et une
+    modification est « une suppression **suivie d'un nouvel envoi** » : c'est le
+    dépôt suivant qui coûte, jamais le retrait. C'est aussi ce que veut
+    `EX-PHO-33` pour une photo dont la conversion a échoué.
+    """
+    with bd.Seance() as seance:
+        photo = seance.get(Photo, photo_uuid)
+        if photo is None or photo.supprimee:
+            return False
+        photo.supprimee = True
+        photo.supprimee_le = config.maintenant()
+        bd.journaliser(seance, Journal.PHOTO_RETIREE, objet_uuid=photo_uuid,
+                       objet_type="photo", acteur=photo.personne_uuid,
+                       pour_le_compte_de=par,
+                       details={"etat_au_retrait": photo.etat})
+        seance.commit()
+        return True
+
+
+def deposer_pour(personne_uuid: str, octets: bytes, par: str = "admin",
+                 est_test: bool = False) -> Photo:
+    """Dépôt par l'administrateur, **sans consommer** (`EX-ADM-10`).
+
+    Le budget épuisé ne s'oppose pas à lui : il agit sans limite. Le geste est
+    identique à celui de l'invité — mêmes contrôles, même conversion —, seule
+    la ligne de journal diffère, et elle dit au nom de qui.
+
+    Rendre un crédit *puis* déposer donnerait le même résultat en deux gestes ;
+    ce raccourci existe parce qu'à 21 h, deux gestes valent un oubli.
+    """
+    photo = deposer(personne_uuid, octets, est_test=est_test,
+                    sans_consommer=True)
+    with bd.Seance() as seance:
+        bd.journaliser(seance, Journal.PHOTO_CREDITEE,
+                       objet_uuid=personne_uuid, objet_type="personne",
+                       acteur=personne_uuid, pour_le_compte_de=par,
+                       details={"motif": "dépôt par l'administrateur",
+                                "photo": photo.uuid})
+        seance.commit()
+    return photo

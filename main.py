@@ -343,6 +343,7 @@ gabarits.env.globals["empreinte_htmx"] = config.empreinte(
 # L'étage se déduit des réponses présentes (EX-QUE-11) ; `base_donnees` n'a pas
 # à relire questions.yaml pour savoir lesquelles relèvent du second étage.
 bd.CLES_SECOND_ETAGE = {q["cle"] for q in CONFIG["bonus"]}
+bd.CODES_LIEUX_CONNUS = list(CODES_LIEUX)
 
 # Les libellés annonçant « N questions de plus » sont dérivés de la
 # configuration : déplacer une question d'un étage à l'autre ne doit jamais
@@ -1233,6 +1234,13 @@ def _fiche(ligne) -> dict:
                          if kv[0] in intitules else 999)],
         "photo": photos.courante(ligne.personne_uuid),
         "budget_photo": photos.budget(ligne.personne_uuid),
+        "max_generations": MAX_GENERATIONS,
+        "motifs": CONFIG.get("motifs_reprise", []),
+        "codes_lieux": CODES_LIEUX,
+        # Le lieu découpe les dix chapitres : le déplacer déséquilibre la
+        # répartition. L'effectif est montré À CÔTÉ du champ, sinon la
+        # conséquence ne se découvre qu'en octobre.
+        "effectifs": bd.effectifs_par_lieu(),
     }
 
 
@@ -1302,6 +1310,90 @@ def admin_chronique(request: Request, identifiant: str,
     contexte = _fiche(ligne)
     contexte.update({"request": request, "mode_test": bd.mode_test_actif()})
     return gabarits.TemplateResponse("admin_chronique.html", contexte)
+
+
+@app.post("/admin/chronique/{identifiant}/regenerer")
+async def admin_regenerer(request: Request, identifiant: str,
+                          _: str = Depends(admin)):
+    """Régénère **sans limite** (EX-ADM-10, EX-IA-22).
+
+    Ni le quota de l'invité ni `MAX_TENTATIVES` ne s'y opposent. Le second est
+    un garde-fou contre une BOUCLE d'appels payants ; un administrateur qui
+    appuie sur un bouton n'est pas une boucle, c'est un acte par appui. Ce qui
+    protège la dépense reste `ia.plafond_appels`, et lui n'est jamais levé.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    donnees = await request.form()
+    motif = (donnees.get("motif") or "").strip()
+    _lancer_generation(identifiant,
+                       motif=motif if motif in MOTIFS_REPRISE else None)
+    return _retour_fiche(ligne)
+
+
+def _retour_fiche(ligne) -> RedirectResponse:
+    """Après chaque action, on revient VOIR le résultat.
+
+    Un écran d'administration qui agit sans remontrer l'objet oblige à
+    retrouver la page à la main — et à 21 h, c'est là qu'on se trompe de
+    chronique.
+    """
+    return RedirectResponse(f"/admin/chronique/{ligne.uuid}", status_code=303)
+
+
+@app.post("/admin/chronique/{identifiant}/modifier")
+async def admin_modifier_chronique(request: Request, identifiant: str,
+                                   _: str = Depends(admin)):
+    ligne = _chronique_ou_404(identifiant)
+    donnees = await request.form()
+    bd.modifier_chronique(identifiant, dict(donnees))
+    return _retour_fiche(ligne)
+
+
+@app.post("/admin/chronique/{identifiant}/crediter")
+async def admin_crediter(request: Request, identifiant: str,
+                         _: str = Depends(admin)):
+    """Rend un crédit, ou les rend tous, sur les photos ou les générations."""
+    ligne = _chronique_ou_404(identifiant)
+    donnees = await request.form()
+    tout = donnees.get("portee") == "tout"
+    if donnees.get("quoi") == "photo":
+        photos.crediter(ligne.personne_uuid, tout=tout)
+    else:
+        bd.crediter_chronique(identifiant, tout=tout)
+    return _retour_fiche(ligne)
+
+
+@app.post("/admin/chronique/{identifiant}/photo")
+async def admin_photo_action(request: Request, identifiant: str,
+                             fichier: UploadFile | None = File(None),
+                             _: str = Depends(admin)):
+    """Dépose au nom de l'invité, ou retire sa photo. Sans jamais consommer."""
+    ligne = _chronique_ou_404(identifiant)
+    donnees = await request.form()
+    if donnees.get("action") == "retirer":
+        photo = photos.courante(ligne.personne_uuid)
+        if photo is not None:
+            photos.retirer(photo.uuid, par="admin")
+        return _retour_fiche(ligne)
+    if fichier is not None:
+        octets = await fichier.read()
+        try:
+            photos.deposer_pour(ligne.personne_uuid, octets,
+                                est_test=bool(ligne.est_test))
+        except photos.RefusPhoto as refus:
+            return JSONResponse({"refus": str(refus)}, status_code=422)
+    return _retour_fiche(ligne)
+
+
+@app.post("/admin/chronique/{identifiant}/supprimer")
+async def admin_supprimer_chronique(request: Request, identifiant: str,
+                                    _: str = Depends(admin)):
+    """Masque ou remontre. Toujours réversible (EX-GEN-03)."""
+    ligne = _chronique_ou_404(identifiant)
+    donnees = await request.form()
+    bd.supprimer_chronique(identifiant,
+                           supprimee=donnees.get("action") != "restaurer")
+    return _retour_fiche(ligne)
 
 
 @app.get("/admin/photo/{identifiant}/{variante}")

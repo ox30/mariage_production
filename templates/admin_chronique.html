@@ -3,6 +3,18 @@
 <p class="discret"><a href="/admin/chroniques{% if p.est_test %}?test=oui{% endif %}">←
    Toutes les chroniques</a></p>
 
+{% if p.supprimee %}
+  <div class="alerte"><strong>Cette chronique est masquée.</strong>
+     Elle ne paraît ni sur la carte des mariés, ni dans les totaux. Rien n'est
+     effacé.
+     <form method="post" action="/admin/chronique/{{ p.uuid }}/supprimer"
+           style="display:inline">
+       <input type="hidden" name="action" value="restaurer">
+       <button class="action sobre" type="submit">La remontrer</button>
+     </form>
+  </div>
+{% endif %}
+
 <h1>{{ p.prenom }} {{ p.nom }}</h1>
 <p class="discret">
   {{ p.nom_fictif or "sans nom fictif" }} · {{ p.peuple or "—" }} ·
@@ -54,6 +66,44 @@
   </p>
 {% endif %}
 
+<form method="post" enctype="multipart/form-data"
+      action="/admin/chronique/{{ p.uuid }}/photo">
+  {# EX-ADM-10 — l'administrateur dépose sans consommer, même budget épuisé.
+     Même fonction que l'invité : un second chemin de dépôt divergerait du
+     premier au prochain changement de règle. #}
+  <label class="action sobre" style="display:inline-block">
+    Déposer une photo pour lui
+    <input type="file" accept="image/*" hidden
+           onchange="this.form.submit()"></label>
+  {% if photo %}
+    <button class="action sobre" type="submit" name="action" value="retirer"
+            onclick="return confirm('Retirer la photo de {{ p.prenom }} ? Le fichier reste sur le volume, et cela ne lui coûte aucun changement.')">
+      Retirer sa photo</button>
+  {% endif %}
+</form>
+
+<h2>Ses crédits</h2>
+{# Le budget est DÉRIVÉ du journal : rien à décrémenter ici, on écrit une
+   ligne et le compte se refait. Rendre tout pose une BORNE datée, donc deux
+   appuis donnent le même résultat qu'un seul. #}
+<p class="discret">
+  Photos : {{ budget_photo.consommes }} sur {{ budget_photo.maximum }}
+  ({{ budget_photo.restants }} restant(s)) ·
+  Portraits : {{ p.nb_generations }} sur {{ max_generations }} ·
+  {{ p.nb_tentatives }} tentative(s) technique(s)
+</p>
+{% for quoi, intitule in [("photo", "photo"), ("chronique", "portrait")] %}
+  <form method="post" action="/admin/chronique/{{ p.uuid }}/crediter"
+        style="display:inline">
+    <input type="hidden" name="quoi" value="{{ quoi }}">
+    <button class="action sobre" type="submit" name="portee" value="un">
+      +1 {{ intitule }}</button>
+    <button class="action sobre" type="submit" name="portee" value="tout"
+            onclick="return confirm('Rendre TOUS les crédits de {{ intitule }} à {{ p.prenom }} ?')">
+      Tout rendre</button>
+  </form>
+{% endfor %}
+
 <h2>Ce qu'il a répondu</h2>
 {% if not reponses %}
   <p class="discret">Aucune réponse enregistrée.</p>
@@ -86,6 +136,47 @@
     {{ p.jetons_entree or 0 }} jetons d'entrée,
     {{ p.jetons_sortie or 0 }} de sortie
   </p>
+{% endif %}
+
+<h2>Corriger</h2>
+{# `reponses_json` n'est PAS modifiable ici : c'est la seule vérité
+   (EX-GEN-08). Réécrire un portrait soigne le symptôme ; régénérer sur des
+   réponses corrigées soigne la cause. D'où le bouton de régénération à côté. #}
+<form method="post" action="/admin/chronique/{{ p.uuid }}/modifier">
+  <p><label>Nom fictif<br>
+    <input type="text" name="nom_fictif" value="{{ p.nom_fictif or '' }}"></label></p>
+  <p><label>Peuple<br>
+    <input type="text" name="peuple" value="{{ p.peuple or '' }}"></label></p>
+  <p><label>Lieu — <span class="discret">{{ lieu_affiche }}</span><br>
+    <select name="lieu">
+      {% for code in codes_lieux %}
+        <option value="{{ code }}" {% if code == p.lieu %}selected{% endif %}>
+          {{ libelle_lieu(code) }} — {{ effectifs.get(code, 0) }} convoqué(s)
+        </option>
+      {% endfor %}
+    </select></label></p>
+  <p><label>Indice<br>
+    <input type="text" name="indice" value="{{ p.indice or '' }}"></label></p>
+  <p><label>Portrait<br>
+    <textarea name="portrait" rows="12">{{ p.portrait or '' }}</textarea></label></p>
+  <button class="action" type="submit">Enregistrer</button>
+</form>
+
+<form method="post" action="/admin/chronique/{{ p.uuid }}/regenerer">
+  <label class="discret">Motif de reprise
+    <select name="motif">
+      <option value="">aucun</option>
+      {% for m in motifs %}<option value="{{ m.cle }}">{{ m.libelle }}</option>{% endfor %}
+    </select></label>
+  <button class="action sobre" type="submit">Régénérer — sans limite</button>
+</form>
+
+{% if not p.supprimee %}
+<form method="post" action="/admin/chronique/{{ p.uuid }}/supprimer">
+  <button class="action sobre" type="submit"
+          onclick="return confirm('Masquer la chronique de {{ p.prenom }} ? Elle disparaîtra de la carte et des totaux. Rien n\'est effacé : vous pourrez la remontrer.')">
+    Masquer cette chronique</button>
+</form>
 {% endif %}
 
 <p class="discret">

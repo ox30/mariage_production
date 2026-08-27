@@ -98,11 +98,28 @@ def initialiser() -> None:
 # Compteurs dérivés
 # --------------------------------------------------------------------------- #
 
-def _compter(seance: Session, chronique_uuid: str, action: str) -> int:
+def borne_de_remise(seance: Session, ancre: str, action: str,
+                    colonne=Journal.objet_uuid):
+    """Horodatage de la dernière remise à zéro, ou None.
+
+    Une remise à zéro est une **date**, pas une quantité : tout ce qui la
+    précède ne compte plus. C'est ce qui la rend idempotente — deux appuis
+    posent deux bornes, la dernière gagne, le résultat est identique. Des
+    lignes de compensation, elles, s'additionneraient.
+    """
     return seance.scalar(
-        select(func.count()).select_from(Journal)
-        .where(Journal.objet_uuid == chronique_uuid, Journal.action == action)
-    ) or 0
+        select(func.max(Journal.horodatage))
+        .where(colonne == ancre, Journal.action == action))
+
+
+def _compter(seance: Session, chronique_uuid: str, action: str,
+             depuis=None) -> int:
+    requete = (select(func.count()).select_from(Journal)
+               .where(Journal.objet_uuid == chronique_uuid,
+                      Journal.action == action))
+    if depuis is not None:
+        requete = requete.where(Journal.horodatage > depuis)
+    return seance.scalar(requete) or 0
 
 
 def compteurs(seance: Session, chronique_uuid: str) -> tuple[int, int]:
@@ -111,8 +128,19 @@ def compteurs(seance: Session, chronique_uuid: str) -> tuple[int, int]:
     Le premier consomme le quota de l'invité, le second est un garde-fou
     technique. Les deux sont dérivés : aucune colonne ne les porte
     (EX-GEN-07, EX-IA-21).
+
+    **`nb_tentatives` ignore la remise à zéro, et c'est voulu.** Rendre ses
+    crédits à un invité ne doit pas rouvrir la porte à une chronique
+    empoisonnée qui rappellerait l'API en boucle : le quota est une courtoisie,
+    le garde-fou technique n'en est pas une.
     """
-    return (_compter(seance, chronique_uuid, Journal.CHRONIQUE_GENEREE),
+    depuis = borne_de_remise(seance, chronique_uuid,
+                             Journal.CHRONIQUE_CREDITS_REMIS)
+    obtenus = (_compter(seance, chronique_uuid, Journal.CHRONIQUE_GENEREE,
+                        depuis)
+               - _compter(seance, chronique_uuid, Journal.CHRONIQUE_CREDITEE,
+                          depuis))
+    return (max(0, obtenus),
             _compter(seance, chronique_uuid, Journal.CHRONIQUE_TENTEE))
 
 
@@ -197,6 +225,30 @@ def creer_personne(seance: Session, prenom: str, nom: str,
 # Assignation du lieu
 # --------------------------------------------------------------------------- #
 
+def _effectifs(seance: Session, codes_lieux: list[str]) -> dict[str, int]:
+    """Combien de chroniques vivantes par lieu.
+
+    Extrait pour servir aux DEUX usages — l'équilibrage et l'affichage à côté
+    du champ de l'administrateur. Deux calculs séparés divergeraient au premier
+    changement de règle, sur l'exclusion des chroniques masquées par exemple.
+    """
+    effectifs = {code: 0 for code in codes_lieux}
+    for code, total in seance.execute(
+        select(Chronique.lieu, func.count())
+        .where(Chronique.supprimee.is_(False))
+        .group_by(Chronique.lieu)
+    ):
+        if code in effectifs:
+            effectifs[code] = total
+    return effectifs
+
+
+def effectifs_par_lieu(codes_lieux: list[str] | None = None) -> dict[str, int]:
+    """Le même décompte, ouvert aux appelants qui n'ont pas de séance."""
+    with Seance() as seance:
+        return _effectifs(seance, list(codes_lieux or CODES_LIEUX_CONNUS))
+
+
 def assigner_lieu(seance: Session, codes_lieux: list[str]) -> str:
     """Le lieu le moins peuplé ; tirage au sort en cas d'égalité (EX-IA-06).
 
@@ -208,14 +260,7 @@ def assigner_lieu(seance: Session, codes_lieux: list[str]) -> str:
     elle-même un indice, alors qu'une grappe due au hasard est indiscernable
     d'un plan de table.
     """
-    effectifs = {code: 0 for code in codes_lieux}
-    for code, total in seance.execute(
-        select(Chronique.lieu, func.count())
-        .where(Chronique.supprimee.is_(False))
-        .group_by(Chronique.lieu)
-    ):
-        if code in effectifs:
-            effectifs[code] = total
+    effectifs = _effectifs(seance, codes_lieux)
     minimum = min(effectifs.values())
     return random.choice([c for c, n in effectifs.items() if n == minimum])
 
@@ -789,6 +834,9 @@ def personne_de_l_appareil(appareil_uuid: str | None) -> Personne | None:
 # Renseigné au démarrage par main.py, seul module qui lit questions.yaml.
 # `base_donnees` n'a pas à connaître le contenu éditorial du questionnaire.
 CLES_SECOND_ETAGE: set[str] = set()
+# Semé par `main` au démarrage, comme `CLES_SECOND_ETAGE` : `base_donnees` ne
+# lit pas `questions.yaml`, c'est `main` qui déclare ce qu'il sait.
+CODES_LIEUX_CONNUS: list[str] = []
 
 
 def etage_des_reponses(reponses: dict) -> int:
@@ -1027,3 +1075,89 @@ def ajouter_bonus(identifiant: str, reponses_bonus: dict) -> None:
         chronique.validee = False
         chronique.etat = "en_attente"
         seance.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Ce que l'administrateur peut écrire (EX-ADM-10)
+# --------------------------------------------------------------------------- #
+
+CHAMPS_MODIFIABLES = ("nom_fictif", "peuple", "portrait", "indice", "lieu")
+
+
+def modifier_chronique(identifiant: str, valeurs: dict,
+                       par: str = "admin") -> dict:
+    """Écrit les champs autorisés et journalise **ce qui a changé**.
+
+    Une ligne « modifiée » sans le détail ne sert à rien en octobre : ce qu'on
+    voudra savoir, c'est si un portrait a été retouché à la main, et depuis
+    quoi. Le journal porte donc l'ancienne et la nouvelle valeur.
+
+    `reponses_json` ne passe PAS par ici : c'est la seule vérité (`EX-GEN-08`),
+    et elle se corrige par l'écran de reprise, qui régénère ensuite. Réécrire
+    un portrait sans toucher aux réponses soigne le symptôme ; corriger la
+    réponse soigne la cause.
+    """
+    changements = {}
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return {}
+        for champ in CHAMPS_MODIFIABLES:
+            if champ not in valeurs:
+                continue
+            nouveau = (valeurs[champ] or "").strip() or None
+            ancien = getattr(chronique, champ)
+            if nouveau == ancien:
+                continue
+            setattr(chronique, champ, nouveau)
+            changements[champ] = {"avant": ancien, "apres": nouveau}
+        if changements:
+            journaliser(seance, Journal.CHRONIQUE_MODIFIEE,
+                        objet_uuid=identifiant, objet_type="chronique",
+                        pour_le_compte_de=par, details=changements)
+            seance.commit()
+    return changements
+
+
+def crediter_chronique(identifiant: str, tout: bool = False,
+                       par: str = "admin") -> int:
+    """Rend une génération, ou les rend toutes. Voir `photos.crediter`.
+
+    `nb_tentatives` n'est jamais rendu : c'est le garde-fou technique contre
+    une chronique qui rappellerait l'API en boucle, pas une courtoisie.
+    """
+    with Seance() as seance:
+        journaliser(
+            seance,
+            Journal.CHRONIQUE_CREDITS_REMIS if tout
+            else Journal.CHRONIQUE_CREDITEE,
+            objet_uuid=identifiant, objet_type="chronique",
+            pour_le_compte_de=par)
+        seance.commit()
+        return compteurs(seance, identifiant)[0]
+
+
+def supprimer_chronique(identifiant: str, supprimee: bool = True,
+                        par: str = "admin") -> bool:
+    """Masque ou remontre une chronique. **Réversible** (`EX-GEN-03`).
+
+    À 21 h, avec un verre, une confirmation ne suffit pas : ce qui sauve, c'est
+    de pouvoir revenir en arrière. Rien n'est effacé, et `reponses_json` — la
+    seule chose qui ne se réécrit pas — reste intacte.
+    """
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None or bool(chronique.supprimee) == supprimee:
+            return False
+        chronique.supprimee = supprimee
+        # `Chronique` ne porte pas de `supprimee_le`, contrairement à `Photo` —
+        # et on n'ajoute pas une migration pour ça à dix jours : l'horodatage
+        # de la suppression vit dans le journal, qui est de toute façon le
+        # seul endroit où l'on saura AUSSI qui l'a faite.
+        journaliser(seance,
+                    Journal.CHRONIQUE_SUPPRIMEE if supprimee
+                    else Journal.CHRONIQUE_RESTAUREE,
+                    objet_uuid=identifiant, objet_type="chronique",
+                    pour_le_compte_de=par)
+        seance.commit()
+        return True

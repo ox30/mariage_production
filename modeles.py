@@ -423,6 +423,23 @@ class Journal(_CleUUID, Base):
     PHOTO_DEPOSEE = "photo_deposee"
     PHOTO_ECHOUEE = "photo_echouee"
     PHOTO_RETIREE = "photo_retiree"
+    # EX-ADM-10 — l'administrateur rend un crédit, ou les rend tous.
+    # **Rendre UN crédit est une quantité ; tout rendre est une DATE.** Écrire
+    # quatre lignes de compensation marcherait — mais un double appui sur un
+    # réseau lent en écrirait huit, et le budget passerait au-dessus du
+    # plafond. Une borne est idempotente : deux appuis posent deux bornes, la
+    # dernière gagne, le résultat est le même. Le budget devient « ce qui s'est
+    # passé depuis la dernière remise ».
+    PHOTO_CREDITEE = "photo_creditee"
+    PHOTO_CREDITS_REMIS = "photo_credits_remis"
+    CHRONIQUE_CREDITEE = "chronique_creditee"
+    CHRONIQUE_CREDITS_REMIS = "chronique_credits_remis"
+    # Toute écriture de l'administrateur sur un objet, avec le détail de ce
+    # qui a changé : c'est ce qu'on relira en octobre pour savoir si un
+    # portrait a été retouché à la main.
+    CHRONIQUE_MODIFIEE = "chronique_modifiee"
+    CHRONIQUE_SUPPRIMEE = "chronique_supprimee"
+    CHRONIQUE_RESTAUREE = "chronique_restauree"
 
     horodatage: Mapped[datetime] = mapped_column(HorodatageUTC,
                                                  default=maintenant)

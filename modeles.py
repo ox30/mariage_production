@@ -445,6 +445,16 @@ class Journal(_CleUUID, Base):
     REPONSES_MODIFIEES = "reponses_modifiees"
     CHRONIQUE_SUPPRIMEE = "chronique_supprimee"
     CHRONIQUE_RESTAUREE = "chronique_restauree"
+    # Actions écrites en chaîne libre depuis les étapes 1 et 2, promues en
+    # constantes sans changer leur valeur : l'onglet Historique a besoin d'une
+    # table `action -> libellé`, et une table dont les clés sont des chaînes
+    # recopiées à la main diverge du jour où l'on renomme une action.
+    REPONSES_REPRISES = "reponses_reprises"
+    PERSONNE_CREEE = "personne_creee"
+    NOM_COMPLETE = "nom_complete"
+    IMPORT_INVITES = "import_invites"
+    REGION_MODIFIEE = "region_modifiee"
+    TABLE_RENOMMEE = "table_renommee"
 
     horodatage: Mapped[datetime] = mapped_column(HorodatageUTC,
                                                  default=maintenant)

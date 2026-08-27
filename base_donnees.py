@@ -540,7 +540,7 @@ def completer_nom(personne_uuid: str, prenom: str, nom: str) -> bool:
         personne.prenom = noms.capitaliser(prenom)
         personne.nom = noms.capitaliser(nom)
         if (personne.prenom, personne.nom) != avant:
-            journaliser(seance, "nom_complete", objet_uuid=personne_uuid,
+            journaliser(seance, Journal.NOM_COMPLETE, objet_uuid=personne_uuid,
                         objet_type="personne", acteur=personne_uuid,
                         details={"avant": f"{avant[0]} {avant[1]}".strip(),
                                  "apres": f"{personne.prenom} {personne.nom}".strip()})
@@ -576,7 +576,7 @@ def creer_personne_libre(prenom: str, nom: str,
     with Seance() as seance:
         personne = creer_personne(seance, prenom, nom, genre=genre,
                                   source="saisie_libre")
-        journaliser(seance, "personne_creee", objet_uuid=personne.uuid,
+        journaliser(seance, Journal.PERSONNE_CREEE, objet_uuid=personne.uuid,
                     objet_type="personne", acteur=personne.uuid,
                     details={"source": "saisie_libre"})
         seance.commit()
@@ -656,7 +656,7 @@ def modifier_region(code: str, libelle: str, locution: str, ombre: str) -> bool:
         region.libelle = libelle.strip() or region.libelle
         region.locution = locution.strip() or region.locution
         region.ombre = ombre.strip()
-        journaliser(seance, "region_modifiee", objet_uuid=code,
+        journaliser(seance, Journal.REGION_MODIFIEE, objet_uuid=code,
                     objet_type="region",
                     details={"libelle": region.libelle,
                              "locution": region.locution})
@@ -705,7 +705,7 @@ def renommer_table(uuid: str, nom: str) -> bool:
         if table is None:
             return False
         table.nom = nom
-        journaliser(seance, "table_renommee", objet_uuid=uuid,
+        journaliser(seance, Journal.TABLE_RENOMMEE, objet_uuid=uuid,
                     objet_type="table", details={"code": table.code, "nom": nom})
         seance.commit()
     return True
@@ -1055,7 +1055,7 @@ def reprendre_reponses(identifiant: str, reponses: dict) -> None:
         chronique.etage = etage_des_reponses(fusionnees)
         chronique.validee = False
         chronique.etat = "en_attente"
-        journaliser(seance, "reponses_reprises", objet_uuid=identifiant,
+        journaliser(seance, Journal.REPONSES_REPRISES, objet_uuid=identifiant,
                     objet_type="chronique", acteur=chronique.personne_uuid,
                     details={"cles_modifiees": modifiees})
         seance.commit()
@@ -1294,3 +1294,22 @@ def _toutes_les_cles(seance: Session, identifiant: str) -> set[str]:
         except ValueError:
             pass
     return connues
+
+
+def marquer_en_attente(identifiant: str) -> None:
+    """Dit que le Conseil va écrire, à l'instant même où la tâche est en file.
+
+    Sans cela, l'état reste `prete` entre la mise en file et le moment où un
+    fil se saisit de la tâche : l'écran continue de montrer l'ancien portrait
+    sans un mot. Le parcours invité gagnait cette course par la vitesse du
+    worker et non par construction — huit fils libres réclament en quelques
+    millisecondes. La route d'administration, elle, la perdait toujours.
+
+    N'écrase jamais `en_cours` : une tâche déjà saisie ne revient pas en
+    arrière.
+    """
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is not None and chronique.etat != "en_cours":
+            chronique.etat = "en_attente"
+            seance.commit()

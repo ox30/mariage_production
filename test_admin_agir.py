@@ -197,7 +197,8 @@ with bd.Seance() as seance:
     assert seance.get(Chronique, yann.uuid).reponses_json
 assert avant_carte - len(bd.lister()) == 1
 
-fiche = client.get(f"/admin/chronique/{yann.uuid}", auth=ADMIN).text
+fiche = client.get(f"/admin/chronique/{yann.uuid}?onglet=danger",
+                   auth=ADMIN).text
 assert "Cette chronique est masquée" in _texte(fiche)
 assert "La remontrer" in fiche
 
@@ -207,12 +208,17 @@ with bd.Seance() as seance:
     assert seance.get(Chronique, yann.uuid).supprimee is False
 assert len(bd.lister()) == avant_carte
 
-# Les deux boutons destructeurs demandent confirmation.
-fiche = client.get(f"/admin/chronique/{yann.uuid}", auth=ADMIN).text
-bloc = fiche.split('value="tout"')[1].split("</button>")[0]
-assert "confirm(" in bloc, bloc
-bloc = fiche.split("/supprimer")[-1]
-assert "confirm(" in bloc
+# Les deux boutons destructeurs demandent confirmation, chacun sur son onglet.
+credits = client.get(f"/admin/chronique/{yann.uuid}?onglet=credits",
+                     auth=ADMIN).text
+assert "confirm(" in credits.split('value="tout"')[1].split("</button>")[0]
+danger = client.get(f"/admin/chronique/{yann.uuid}?onglet=danger",
+                    auth=ADMIN).text
+assert "confirm(" in danger.split("/supprimer")[-1]
+# La zone de danger est un onglet SÉPARÉ : un bouton destructeur ne doit pas se
+# trouver sous le doigt qui cherchait autre chose.
+assert "/supprimer" not in credits and "/supprimer" not in client.get(
+    f"/admin/chronique/{yann.uuid}?onglet=portrait", auth=ADMIN).text
 
 print("TOUT PASSE — suppression douce, confirmée, réversible")
 
@@ -295,7 +301,8 @@ print("TOUT PASSE — l'administrateur régénère là où l'invité est arrêt�
 # Le lieu découpe les dix chapitres : le déplacer déséquilibre la répartition.
 # L'effectif doit être visible À CÔTÉ du champ, sinon la conséquence ne se
 # découvre qu'en octobre.
-fiche = client.get(f"/admin/chronique/{xavier.uuid}", auth=ADMIN).text
+fiche = client.get(f"/admin/chronique/{xavier.uuid}?onglet=portrait",
+                   auth=ADMIN).text
 choix = fiche.split('name="lieu"')[1].split("</select>")[0]
 assert "convoqué(s)" in _texte(choix), choix[:300]
 for code in main.CODES_LIEUX:
@@ -363,7 +370,8 @@ print("TOUT PASSE — aucun champ de formulaire n'est muet")
 # En texte libre, une faute de frappe crée un peuple qui n'existe pas :
 # « naint » est arrivé en production le 27 août.
 bertrand = _chronique("Bertrand")
-fiche = client.get(f"/admin/chronique/{bertrand.uuid}", auth=ADMIN).text
+fiche = client.get(f"/admin/chronique/{bertrand.uuid}?onglet=portrait",
+                   auth=ADMIN).text
 choix = fiche.split('name="peuple"')[1].split("</select>")[0]
 assert "<input" not in fiche.split('name="peuple"')[0][-40:], \
     "le peuple est resté un champ libre"
@@ -378,7 +386,7 @@ assert len(main.CONFIG["peuples"]) == 18
 # Une valeur déjà en base et hors liste est CONSERVÉE et signalée : l'effacer
 # en silence cacherait peut-être un vrai défaut de génération.
 bd.modifier_chronique(bertrand.uuid, {"peuple": "naint"})
-choix = client.get(f"/admin/chronique/{bertrand.uuid}",
+choix = client.get(f"/admin/chronique/{bertrand.uuid}?onglet=portrait",
                    auth=ADMIN).text.split('name="peuple"')[1].split("</select>")[0]
 assert "naint" in choix and "hors liste" in choix, choix[:200]
 
@@ -406,7 +414,8 @@ assert relu.portrait == "Un paragraphe.\n\nUn autre.", "le portrait a bougé"
 # Le drapeau est dérivé de deux dates du journal, jamais stocké.
 assert bd.reponses_divergentes(celine.uuid) is True
 assert "ont changé depuis le dernier portrait" in _texte(
-    client.get(f"/admin/chronique/{celine.uuid}", auth=ADMIN).text)
+    client.get(f"/admin/chronique/{celine.uuid}?onglet=questionnaire",
+               auth=ADMIN).text)
 
 # Corriger le PORTRAIT ne lève pas le drapeau : sinon il serait levé en
 # permanence et on cesserait de le lire.
@@ -482,7 +491,7 @@ assert apres_url != avant_url, \
 
 # La fiche d'administration porte la même empreinte.
 fiche_url = _source_vignette(
-    client.get(f"/admin/chronique/{felix.uuid}", auth=ADMIN).text)
+    client.get(f"/admin/chronique/{felix.uuid}?onglet=photo", auth=ADMIN).text)
 assert "?v=" in fiche_url, fiche_url
 
 # Et l'en-tête autorise le cache, ce que seule l'empreinte rend sans danger.
@@ -567,3 +576,136 @@ client.post(f"/admin/chronique/{hugues.uuid}/reponses", auth=ADMIN,
 assert bd.reponses_divergentes(hugues.uuid) is True
 
 print("TOUT PASSE — le vœu aux mariés ne périme pas le portrait")
+
+
+# --- les sept onglets, chacun à son adresse ------------------------------ #
+
+# `admin_base.html` pose le principe : « Les onglets sont des LIENS et non du
+# JavaScript : chaque écran a son adresse, donc se recharge, se met en signet
+# et se rouvre après une coupure. » Les sous-onglets le suivent.
+
+irene = _chronique("Irène")
+photos.deposer(irene.personne_uuid, _img())
+
+for cle, titre in main.ONGLETS_CHRONIQUE:
+    page = client.get(f"/admin/chronique/{irene.uuid}?onglet={cle}", auth=ADMIN)
+    assert page.status_code == 200, (cle, page.status_code)
+    # Chaque onglet porte un lien vers TOUS les autres : un onglet qu'on ne
+    # peut pas quitter est un cul-de-sac.
+    for autre, _ in main.ONGLETS_CHRONIQUE:
+        assert f'?onglet={autre}"' in page.text, (cle, autre)
+    # Et le retour vers la liste, à deux niveaux : la barre d'administration
+    # au-dessus, le fil d'Ariane juste ici.
+    assert 'href="/admin/chroniques' in page.text, cle
+    assert 'href="/admin/invites"' in page.text, cle
+
+# Un onglet inconnu retombe sur Portrait plutôt que de rendre une page vide.
+inconnu = client.get(f"/admin/chronique/{irene.uuid}?onglet=nimportequoi",
+                     auth=ADMIN)
+assert inconnu.status_code == 200
+assert 'name="portrait"' in inconnu.text
+# Défaut : sans paramètre du tout.
+assert 'name="portrait"' in client.get(f"/admin/chronique/{irene.uuid}",
+                                       auth=ADMIN).text
+
+# L'onglet actif est marqué — sinon on ne sait plus où l'on est.
+photo_page = client.get(f"/admin/chronique/{irene.uuid}?onglet=photo",
+                        auth=ADMIN).text
+actif = re.search(r'<a[^>]*class="onglet actif"[^>]*href="([^"]+)"', photo_page) \
+    or re.search(r'<a[^>]*href="([^"]+)"[^>]*class="onglet actif"', photo_page)
+assert actif and "onglet=photo" in actif.group(1), photo_page[:200]
+
+print("TOUT PASSE — sept onglets, chacun à son adresse, tous atteignables")
+
+
+# --- l'état de la génération est visible depuis chaque onglet ------------- #
+
+# *Défaut du 27 août :* régénérer depuis l'administration ne montrait rien —
+# la page réaffichait l'ancien portrait sans dire qu'un appel était en cours.
+
+jules = _chronique("Jules")
+repos = client.get(f"/admin/chronique/{jules.uuid}", auth=ADMIN).text
+assert "Le Conseil écrit" not in repos
+# Au repos, pas de sondage : un fragment qui interrogerait toutes les deux
+# secondes une chronique prête tiendrait un fil occupé toute la soirée.
+assert "hx-trigger" not in repos.split('id="etat-generation"')[1][:400]
+
+client.post(f"/admin/chronique/{jules.uuid}/regenerer", data={}, auth=ADMIN)
+assert bd.lire(jules.uuid).etat in ("en_attente", "en_cours")
+for cle, _ in main.ONGLETS_CHRONIQUE:
+    page = client.get(f"/admin/chronique/{jules.uuid}?onglet={cle}",
+                      auth=ADMIN).text
+    assert "Le Conseil écrit" in _texte(page), cle
+    assert f'hx-get="/admin/chronique/{jules.uuid}/etat"' in page, cle
+
+# Le fragment se sert aussi tout seul, c'est lui que HTMX rappelle.
+fragment = client.get(f"/admin/chronique/{jules.uuid}/etat", auth=ADMIN)
+assert fragment.status_code == 200
+assert "Le Conseil écrit" in _texte(fragment.text)
+assert client.get(f"/admin/chronique/{jules.uuid}/etat").status_code == 401
+
+print("TOUT PASSE — la génération en cours se voit depuis tous les onglets")
+
+
+# --- l'historique dit qui a fait quoi, et montre les écarts -------------- #
+
+kilian = _chronique("Kilian")
+photos.deposer(kilian.personne_uuid, _img())
+bd.modifier_chronique(kilian.uuid, {"nom_fictif": "Kilian le Muet"})
+client.post(f"/admin/chronique/{kilian.uuid}/crediter",
+            data={"quoi": "photo", "portee": "un"}, auth=ADMIN)
+
+histoire = client.get(f"/admin/chronique/{kilian.uuid}?onglet=historique",
+                      auth=ADMIN).text
+lu = _texte(histoire)
+# Les libellés sont lisibles, pas des noms de constantes.
+assert "Personnage corrigé à la main" in lu, lu[-800:]
+assert "Photo déposée" in lu
+assert "Crédit photo rendu" in lu
+assert "chronique_modifiee" not in lu, "le journal s'affiche à l'état brut"
+
+# L'avant/après est là, en vert et rouge.
+assert "Kilian le Muet" in lu and "Kilian l'Ancien" in lu
+assert 'class="retire"' in histoire and 'class="ajoute"' in histoire
+
+# Les trois ancres : sans elles, toute la photo resterait dehors — ses actions
+# portent l'UUID du fichier ou celui de la PERSONNE, jamais celui de la
+# chronique.
+assert len(main._journal_de(bd.lire(kilian.uuid))) >= 3
+
+print("TOUT PASSE — l'historique est lisible et montre l'avant/après")
+
+
+# --- le contrôle dit CE QUI diverge, pas seulement QU'il diverge --------- #
+
+lucie = _chronique("Lucie")
+with bd.Seance() as seance:
+    bd.journaliser(seance, Journal.CHRONIQUE_GENEREE,
+                   objet_uuid=lucie.uuid, objet_type="chronique")
+    seance.commit()
+controle = _texte(client.get(f"/admin/chronique/{lucie.uuid}?onglet=controle",
+                             auth=ADMIN).text)
+assert "en accord avec les réponses" in controle
+
+client.post(f"/admin/chronique/{lucie.uuid}/reponses", auth=ADMIN,
+            data={"reponse__metier": "gardienne de phare",
+                  "reponse__souhait": "mille bonheurs"})
+page = client.get(f"/admin/chronique/{lucie.uuid}?onglet=controle",
+                  auth=ADMIN).text
+lu = _texte(page)
+assert "ne reflète plus les réponses" in lu
+assert "gardienne de phare" in lu and "veilleur" in lu
+# Le vœu aux mariés n'atteint pas le modèle : il ne figure pas parmi les écarts.
+assert "mille bonheurs" not in lu, "une réponse hors portrait est comptée"
+assert 'class="ajoute"' in page and 'class="retire"' in page
+
+# Et l'onglet est signalé dans la barre, sinon il faut y aller pour savoir.
+# La barre est cherchée à partir de `<nav`, pas depuis le début de la page :
+# le fragment d'état s'insère au-dessus et contient lui aussi des liens.
+# La SOUS-barre, visée par sa classe : `<nav` seul prenait celle de
+# l'administration, qui vient avant et ne connaît pas les sous-onglets.
+barre = page.split('class="onglets sous-onglets"')[1].split("</nav>")[0]
+pastille = barre.split("onglet=controle")[1].split("</a>")[0]
+assert "•" in pastille, pastille
+
+print("TOUT PASSE — le contrôle montre l'écart, sans le vœu aux mariés")

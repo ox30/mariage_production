@@ -211,7 +211,17 @@ _classes_de_lien = set()
 for _gabarit in sorted((_racine / "templates").glob("*.html")):
     for _attribut in _re.findall(r'<a\b[^>]*\bclass="([^"]+)"',
                                  _gabarit.read_text(encoding="utf-8")):
-        _classes_de_lien.update(_attribut.split())
+        # L'attribut se lit TEL QU'IL SERA RENDU. Découpé brut, il livrait
+        # « onglet{% », « %} », « endif », « if » — jamais des classes. La
+        # sonde ne trouvait donc presque rien, et ce qu'elle trouvait tenait du
+        # hasard. Les blocs Jinja deviennent une espace, pour ne pas coller
+        # deux classes voisines l'une à l'autre.
+        _rendu = _re.sub(r"\{[%{].*?[%}]\}", " ", _attribut, flags=_re.S)
+        _classes_de_lien.update(_rendu.split())
+assert "onglet" in _classes_de_lien and "actif" in _classes_de_lien, \
+    "la sonde ne voit plus les classes des barres d'onglets"
+assert not any("{" in _c or "}" in _c for _c in _classes_de_lien), \
+    sorted(_c for _c in _classes_de_lien if "{" in _c or "}" in _c)
 
 for _classe in sorted(_classes_de_lien):
     _bloc = _re.search(rf"^\.{_re.escape(_classe)}\b[^{{]*{{([^}}]*)}}",
@@ -219,9 +229,13 @@ for _classe in sorted(_classes_de_lien):
     if not _bloc or "background" not in _bloc.group(1):
         continue  # pas un bouton : une classe sans fond n'a rien à écraser
     for _etat in (":link", ":visited"):
-        assert f"a.{_classe}{_etat}" in _style, (
+        # `a.X:link` (0,2,1) ou `.X:link` (0,2,0) : les DEUX battent `a:link`
+        # (0,1,1), donc les deux remplissent l'office. Exiger la seule
+        # écriture avec `a.` éprouverait une orthographe, pas une propriété.
+        assert (f"a.{_classe}{_etat}" in _style
+                or f".{_classe}{_etat}" in _style), (
             f"« {_classe} » pose un fond et sert de lien, mais aucune règle "
-            f"`a.{_classe}{_etat}` ne fixe sa couleur de texte. Le bouton sera "
+            f"`.{_classe}{_etat}` ne fixe sa couleur de texte. Le bouton sera "
             "illisible tant que la souris n'est pas dessus — donc toujours, "
             "sur téléphone.")
     # `:visited` est exigé bien que `a.action` seul suffise aujourd'hui :

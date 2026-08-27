@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 
 from base_donnees import Seance, journaliser
-from modeles import Chronique, Personne, TableGroupe
+from modeles import Chronique, Journal, Personne, TableGroupe
 
 # EX-ADM-05 — l'ordre fait foi. `exemples/gabarit_invites.py` produit ces
 # colonnes et `test_hygiene.py` vérifie qu'il ne s'en écarte pas.
@@ -446,7 +446,7 @@ def appliquer(chemin, liste_complete: bool = False) -> Plan:
                 # n'est jamais perdu.
                 attachee.active = False
 
-        journaliser(seance, "import_invites", objet_type="personne", details={
+        journaliser(seance, Journal.IMPORT_INVITES, objet_type="personne", details={
             "creations": len(plan.creations),
             "modifications": len(plan.modifications),
             "inchangees": len(plan.inchangees),

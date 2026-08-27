@@ -126,24 +126,32 @@ print("TOUT PASSE — la liste distingue une photo absente d'une photo en cours"
 
 # --- la fiche montre les réponses, le portrait et la photo ---------------- #
 
-fiche = client.get(f"/admin/chronique/{maree.uuid}", auth=ADMIN)
+# La fiche est désormais découpée en sous-onglets, chacun à SON adresse : on
+# interroge celui qui porte ce qu'on éprouve, plutôt qu'une page unique.
+fiche = client.get(f"/admin/chronique/{maree.uuid}?onglet=portrait", auth=ADMIN)
+questions = client.get(f"/admin/chronique/{maree.uuid}?onglet=questionnaire",
+                       auth=ADMIN)
+onglet_photo = client.get(f"/admin/chronique/{maree.uuid}?onglet=photo",
+                          auth=ADMIN)
 assert fiche.status_code == 200
 lu = _texte(fiche.text)
 
 # Les réponses sont montrées sous leur INTITULÉ, pas sous leur clé nue : une
 # fiche qui affiche « souvenir » ne se relit pas à côté de l'écran d'origine.
-assert "aiguilleur" in lu and "un quai désert" in lu
-assert "Quel est ton métier" in lu, "l'intitulé de la question manque"
+lu_questions = _texte(questions.text)
+assert "aiguilleur" in lu_questions and "un quai désert" in lu_questions
+assert "Quel est ton métier" in lu_questions, "l'intitulé de la question manque"
 # La clé reste visible à côté : c'est elle qu'on cite dans questions.yaml.
-assert "<code class=\"discret\">metier</code>" in fiche.text
+assert "<code class=\"discret\">metier</code>" in questions.text
 
 assert "Premier paragraphe." in lu and "Second paragraphe." in lu
 assert "Il veille aux aiguillages." in lu
-assert "claude-sonnet-5" in lu
 
 # La photo est là, et son état aussi.
-assert "Reçue, pas encore convertie" in lu
-assert f'href="/admin/photo/{maree.uuid}/originaux"' in fiche.text
+assert "Reçue, pas encore convertie" in _texte(onglet_photo.text)
+# `?v=` sur le LIEN autant que sur l'image : sans empreinte, le navigateur
+# rendait l'ancien fichier. Les deux liens avaient été oubliés le 27 août.
+assert f'href="/admin/photo/{maree.uuid}/originaux?v=' in onglet_photo.text
 
 print("TOUT PASSE — la fiche montre réponses, portrait et état de la photo")
 

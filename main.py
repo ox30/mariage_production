@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote, urlparse
 
 import yaml
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from fastapi import (Depends, FastAPI, File, Form, HTTPException, Request,
                      UploadFile)
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
@@ -464,6 +464,12 @@ def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
     if taches.mettre_en_file("generation_chronique", identifiant) is None:
         # Une génération est déjà en attente ou en cours pour cette chronique.
         _motifs_en_attente.pop(identifiant, None)
+    else:
+        # L'état se pose ICI, pour TOUS les appelants — un second endroit qui
+        # le poserait divergerait au premier ajout. C'est ce qui rend l'attente
+        # visible dès le premier affichage, au lieu de dépendre de la vitesse
+        # à laquelle un fil se saisit de la tâche.
+        bd.marquer_en_attente(identifiant)
 
 
 def _reponses_du_formulaire(donnees: dict, bloc: str) -> dict:
@@ -1236,7 +1242,110 @@ def _intitules_questions() -> dict[str, str]:
     return intitules
 
 
-def _fiche(ligne) -> dict:
+# `action -> libellé lisible`, clés prises aux CONSTANTES et jamais recopiées :
+# un journal qui affiche « chronique_creditee » n'est pas un journal, c'est un
+# vidage de table. Les actions absentes d'ici s'affichent telles quelles plutôt
+# que de disparaître — une trace qu'on ne sait pas nommer reste une trace.
+LIBELLES_JOURNAL = {
+    modeles.Journal.CHRONIQUE_TENTEE: ("Appel au Conseil", "invité"),
+    modeles.Journal.CHRONIQUE_GENEREE: ("Portrait reçu", "invité"),
+    modeles.Journal.REPONSES_REPRISES: ("Réponses reprises", "invité"),
+    modeles.Journal.PHOTO_DEPOSEE: ("Photo déposée", "invité"),
+    modeles.Journal.PHOTO_ECHOUEE: ("Conversion échouée — crédit rendu", "système"),
+    modeles.Journal.PHOTO_RETIREE: ("Photo retirée", ""),
+    modeles.Journal.PHOTO_CREDITEE: ("Crédit photo rendu", "admin"),
+    modeles.Journal.PHOTO_CREDITS_REMIS: ("Crédits photo remis à zéro", "admin"),
+    modeles.Journal.CHRONIQUE_CREDITEE: ("Crédit portrait rendu", "admin"),
+    modeles.Journal.CHRONIQUE_CREDITS_REMIS: ("Crédits portrait remis à zéro", "admin"),
+    modeles.Journal.CHRONIQUE_MODIFIEE: ("Personnage corrigé à la main", "admin"),
+    modeles.Journal.REPONSES_MODIFIEES: ("Réponses corrigées", "admin"),
+    modeles.Journal.CHRONIQUE_SUPPRIMEE: ("Chronique masquée", "admin"),
+    modeles.Journal.CHRONIQUE_RESTAUREE: ("Chronique remontrée", "admin"),
+    modeles.Journal.PERSONNE_CREEE: ("Personne créée", ""),
+    modeles.Journal.NOM_COMPLETE: ("Nom complété", ""),
+}
+
+ONGLETS_CHRONIQUE = [("portrait", "Portrait"), ("photo", "Photo"),
+                     ("questionnaire", "Questionnaire"), ("credits", "Crédits"),
+                     ("controle", "Contrôle"), ("historique", "Historique"),
+                     ("danger", "Danger")]
+
+
+def _journal_de(ligne) -> list[dict]:
+    """Tout ce qui touche cette chronique, du plus récent au plus ancien.
+
+    Trois ancres, parce que le journal n'en a pas qu'une : les actions de
+    chronique portent son UUID, les crédits de photo portent celui de la
+    PERSONNE, et les dépôts de photo portent celui du fichier avec la personne
+    pour acteur. Chercher sur la seule chronique laisserait toute la photo
+    dehors.
+    """
+    with bd.Seance() as seance:
+        lignes = list(seance.scalars(
+            select(modeles.Journal).where(or_(
+                modeles.Journal.objet_uuid == ligne.uuid,
+                modeles.Journal.objet_uuid == ligne.personne_uuid,
+                modeles.Journal.acteur_personne_uuid == ligne.personne_uuid))
+            .order_by(modeles.Journal.horodatage.desc())))
+        entrees = []
+        for j in lignes:
+            libelle, qui = LIBELLES_JOURNAL.get(j.action, (j.action, ""))
+            if j.agit_pour_le_compte_de:
+                qui = f"admin, pour {j.agit_pour_le_compte_de}" \
+                    if j.agit_pour_le_compte_de != "admin" else "admin"
+            try:
+                details = json.loads(j.details_json or "{}")
+            except ValueError:
+                details = {}
+            # On ne garde comme « écarts » que les détails de la forme
+            # {champ: {avant, apres}} : le reste est du contexte, pas un diff.
+            ecarts = {c: v for c, v in details.items()
+                      if isinstance(v, dict) and "avant" in v and "apres" in v}
+            entrees.append({
+                "quand": heure_locale(j.horodatage), "libelle": libelle,
+                "qui": qui, "action": j.action, "ecarts": ecarts,
+                "contexte": {c: v for c, v in details.items() if c not in ecarts},
+            })
+        return entrees
+
+
+def _ecarts_depuis_le_portrait(ligne) -> list[dict]:
+    """Ce qui a bougé depuis la dernière mise en accord du portrait.
+
+    C'est le contenu de l'onglet Contrôle : le drapeau dit QU'il y a un écart,
+    ceci dit LEQUEL. Même définition de « mise en accord » que
+    `reponses_divergentes` — une génération, ou une retouche du personnage —,
+    et la même source, pour que les deux ne puissent pas se contredire.
+    """
+    with bd.Seance() as seance:
+        engendre = seance.scalar(
+            select(func.max(modeles.Journal.horodatage)).where(
+                modeles.Journal.objet_uuid == ligne.uuid,
+                modeles.Journal.action == modeles.Journal.CHRONIQUE_GENEREE))
+        retouche = bd._dernier_touchant(
+            bd._lignes(seance, ligne.uuid, modeles.Journal.CHRONIQUE_MODIFIEE),
+            bd.CHAMPS_DU_PERSONNAGE)
+        bornes = [d for d in (engendre, retouche) if d is not None]
+        depuis = max(bornes) if bornes else None
+        if depuis is None:
+            return []
+        ecarts = []
+        for j in bd._lignes(seance, ligne.uuid, modeles.Journal.REPONSES_MODIFIEES):
+            if j.horodatage <= depuis:
+                continue
+            try:
+                details = json.loads(j.details_json or "{}")
+            except ValueError:
+                continue
+            for cle, valeur in details.items():
+                if cle in bd.CLES_HORS_PORTRAIT:
+                    continue
+                ecarts.append({"cle": cle, "quand": heure_locale(j.horodatage),
+                               **valeur})
+        return ecarts
+
+
+def _fiche(ligne, onglet: str = "portrait") -> dict:
     """Ce qu'une chronique montre à l'administrateur, réponses comprises."""
     intitules = _intitules_questions()
     reponses = json.loads(ligne.reponses_json or "{}")
@@ -1261,6 +1370,11 @@ def _fiche(ligne) -> dict:
         # répartition. L'effectif est montré À CÔTÉ du champ, sinon la
         # conséquence ne se découvre qu'en octobre.
         "effectifs": bd.effectifs_par_lieu(),
+        "onglet": onglet if onglet in dict(ONGLETS_CHRONIQUE) else "portrait",
+        "cles_hors_portrait": bd.CLES_HORS_PORTRAIT,
+        "onglets": ONGLETS_CHRONIQUE,
+        "journal": _journal_de(ligne) if onglet == "historique" else [],
+        "ecarts": _ecarts_depuis_le_portrait(ligne) if onglet == "controle" else [],
     }
 
 
@@ -1324,10 +1438,10 @@ def admin_chronique_json(identifiant: str, _: str = Depends(admin)):
 
 
 @app.get("/admin/chronique/{identifiant}", response_class=HTMLResponse)
-def admin_chronique(request: Request, identifiant: str,
+def admin_chronique(request: Request, identifiant: str, onglet: str = "portrait",
                     _: str = Depends(admin)):
     ligne = _chronique_ou_404(identifiant)
-    contexte = _fiche(ligne)
+    contexte = _fiche(ligne, onglet)
     contexte.update({"request": request, "mode_test": bd.mode_test_actif()})
     return gabarits.TemplateResponse("admin_chronique.html", contexte)
 
@@ -1431,6 +1545,23 @@ async def admin_supprimer_chronique(request: Request, identifiant: str,
     bd.supprimer_chronique(identifiant,
                            supprimee=donnees.get("action") != "restaurer")
     return _retour_fiche(ligne)
+
+
+@app.get("/admin/chronique/{identifiant}/etat", response_class=HTMLResponse)
+def admin_etat_chronique(request: Request, identifiant: str,
+                         _: str = Depends(admin)):
+    """L'état de la génération, rafraîchi tant qu'elle dure.
+
+    Sans lui, régénérer depuis l'administration ne montrait RIEN : la page
+    redirigeait vers la fiche, qui réaffichait l'ancien portrait sans dire
+    qu'un appel était en cours. *Constaté le 27 août.* Le parcours invité avait
+    déjà son rafraîchissement — l'administrateur n'en avait pas.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    return gabarits.TemplateResponse(
+        "fragment_admin_etat.html",
+        {"request": request, "p": ligne, "max_generations": MAX_GENERATIONS,
+         "max_tentatives": bd.MAX_TENTATIVES})
 
 
 @app.get("/admin/photo/{identifiant}/{variante}")

@@ -399,6 +399,30 @@ th { font-family: var(--titre); font-weight: 400; color: var(--brume-faible); fo
 /* Deux registres d'alerte, tirés de la palette et non inventés au gabarit.
    La braise pour ce qui bloque ou retire, le laiton pour ce qui appelle une
    vérification sans rien empêcher. */
+/* Les sous-onglets d'une fiche : plus discrets que la barre principale, pour
+   qu'on voie d'un coup d'œil lequel des deux niveaux on parcourt. */
+.sous-onglets { margin: 0 0 1.4rem; font-size: 0.9rem; }
+.sous-onglets .onglet { padding: 0.35rem 0.7rem; }
+
+/* Vert et rouge, mais tirés de la palette et jamais du feu tricolore : sur
+   fond nuit, un vert franc vibre et se lit mal. */
+.ajoute { color: #7fb77e; }
+.retire { color: var(--braise); text-decoration: line-through; }
+
+.entree-journal {
+  border-left: 2px solid var(--ardoise-clair);
+  padding: 0.55rem 0 0.55rem 0.9rem;
+  margin: 0 0 0.7rem;
+  font-size: 0.93rem;
+}
+
+/* Un bouton destructeur ne se confond pas avec les autres : il porte la
+   braise, la même couleur que ce qui bloque ou retire. */
+.action.peril, .action.peril:link, .action.peril:visited {
+  border-color: var(--braise);
+  color: var(--braise);
+}
+
 .alerte { color: var(--braise); }
 .vigilance { color: var(--laiton); }
 

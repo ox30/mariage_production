@@ -7,8 +7,10 @@ Ce fichier ne contient volontairement aucun prénom réel : il les lit dans
 l'environnement. Les écrire ici serait précisément la faute qu'il surveille.
 """
 import os
+import ast as _ast
 import pathlib
 import re
+import re as _re
 import subprocess
 import sys
 
@@ -267,3 +269,70 @@ for _colonne in _attendues:
 assert (RACINE / "exemples" / "invites-gabarit.xlsx").is_file(), \
     "le classeur produit doit être versionné à côté de son script"
 print("TOUT PASSE — le gabarit d'import porte les sept colonnes d'EX-ADM-05")
+
+
+# --- tout fichier Python versionné doit compiler --------------------------- #
+
+# *Le 30 août, deux fois de suite :* d'abord des marqueurs de conflit Git
+# commités tels quels dans `main.py`, puis une assertion à l'import. Chaque
+# fois le service est mort en boucle, et l'explorateur de fichiers de Railway
+# passant par le conteneur, le volume est devenu inatteignable avec lui.
+#
+# La sonde est bête et c'est voulu : elle ne juge rien, elle vérifie que le
+# fichier PARSE. C'est le seul contrôle qui aurait attrapé les deux.
+
+_pythons = sorted(p for p in RACINE.rglob("*.py")
+                  if "donnees-locales" not in p.parts
+                  and "__pycache__" not in p.parts)
+assert len(_pythons) > 20, f"{len(_pythons)} fichier(s) Python trouvé(s) — " \
+    "la sonde n'examine presque rien"
+
+_casses = []
+for _fichier in _pythons:
+    try:
+        _ast.parse(_fichier.read_text(encoding="utf-8"))
+    except SyntaxError as _exc:
+        _casses.append(f"{_fichier.relative_to(RACINE)} ligne {_exc.lineno} : "
+                       f"{_exc.msg}")
+assert not _casses, "fichier(s) Python qui ne compilent pas :\n  " \
+    + "\n  ".join(_casses)
+
+print(f"TOUT PASSE — les {len(_pythons)} fichiers Python du dépôt compilent")
+
+
+# --- aucun marqueur de conflit Git ne doit être commité -------------------- #
+
+# Un conflit non résolu empile les deux versions dans le fichier. Python lit
+# `<<<<<<< HEAD` comme du code, et la première chaîne de documentation qui suit
+# perd son ouvrant. C'est exactement ce qui a été commité le 30 août — et c'est
+# bien plus fréquent qu'une faute de frappe.
+#
+# Les marqueurs sont composés à l'exécution : écrits en clair, ce fichier
+# s'accuserait lui-même.
+# Ancré en DÉBUT DE LIGNE, et le séparateur du milieu doit être seul sur la
+# sienne : « # ====…==== » est un trait décoratif, présent dans
+# `exemples/config.yaml` et `test_identite.py`. Une sonde qui crie au loup use
+# la confiance qu'on lui porte, et c'est le jour où elle aura raison qu'on ne
+# la lira plus.
+_marqueurs = [_re.compile(motif, _re.M) for motif in (
+    "^" + "<" * 7 + " ", "^" + "=" * 7 + "$", "^" + ">" * 7 + " ")]
+_conflits = []
+for _fichier in sorted(RACINE.rglob("*")):
+    if not _fichier.is_file() or _fichier.suffix not in (
+            ".py", ".html", ".yaml", ".css", ".md", ".txt", ".ini"):
+        continue
+    if "donnees-locales" in _fichier.parts or ".git" in _fichier.parts:
+        continue
+    if _fichier.name == "test_hygiene.py":
+        continue
+    _contenu = _fichier.read_text(encoding="utf-8", errors="replace")
+    for _marqueur in _marqueurs:
+        _trouve = _marqueur.search(_contenu)
+        if _trouve:
+            _ligne = _contenu[:_trouve.start()].count("\n") + 1
+            _conflits.append(f"{_fichier.relative_to(RACINE)} ligne {_ligne}")
+            break
+assert not _conflits, "marqueur(s) de conflit Git commité(s) :\n  " \
+    + "\n  ".join(_conflits)
+
+print("TOUT PASSE — aucun marqueur de conflit Git dans le dépôt")

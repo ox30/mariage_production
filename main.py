@@ -146,6 +146,16 @@ async def cycle_de_vie(_: FastAPI):
     # seule, et l'écran de l'invité continuera d'affirmer qu'on la prépare.
     # Couvre le redémarrage en plein travail — et les photos déposées avant que
     # le traitant n'existe (26 août).
+    if QUESTIONNAIRE_MARIES_REDUIT:
+        print("mariés          : questionnaire réduit ACTIF — "
+              f"{len(QUESTIONS_RETIREES_AUX_MARIES)} question(s) retirée(s), "
+              f"{len(REPONSES_FORCEES_AUX_MARIES)} forcée(s)", flush=True)
+    else:
+        print("mariés          : questionnaire réduit INACTIF — aucune marque "
+              "`sur_les_maries` dans le questions.yaml DU VOLUME. Les mariés "
+              "recevront le questionnaire entier. Déposez le fichier à jour.",
+              flush=True)
+
     reprises = photos.reprendre_conversions_perdues()
     if reprises:
         print(f"photos          : {reprises} conversion(s) perdue(s) remise(s) "
@@ -374,8 +384,17 @@ REPONSES_FORCEES_AUX_MARIES = {
     q["cle"]: q["sur_les_maries"]
     for bloc in ("obligatoires", "bonus") for q in CONFIG[bloc]
     if q.get("sur_les_maries") not in (None, "retiree")}
-assert QUESTIONS_RETIREES_AUX_MARIES and REPONSES_FORCEES_AUX_MARIES, \
-    "aucune question n'est marquée `sur_les_maries` dans questions.yaml"
+# **Pas d'`assert` ici.** `questions.yaml` vit sur le VOLUME, pas dans le
+# dépôt : déployer du code qui exige un marquage absent du fichier déposé tue
+# le service au démarrage — et l'explorateur de fichiers de Railway passe par
+# le conteneur, donc le fichier à corriger devient inatteignable. C'est le
+# blocage circulaire du 25 août, repayé le 30 août par ma faute.
+#
+# Un marquage absent n'est pas dangereux : les mariés reçoivent alors le
+# questionnaire entier. C'est gênant, jamais grave. Le service démarre, et la
+# ligne de sonde le dit assez fort pour qu'on le voie.
+QUESTIONNAIRE_MARIES_REDUIT = bool(QUESTIONS_RETIREES_AUX_MARIES
+                                   or REPONSES_FORCEES_AUX_MARIES)
 
 
 def questions_du_bloc(bloc: str, est_marie: bool) -> list:
@@ -384,7 +403,7 @@ def questions_du_bloc(bloc: str, est_marie: bool) -> list:
     Une question forcée est retirée de l'affichage **et** de la saisie : sa
     valeur est écrite d'office, la laisser à l'écran inviterait à la contredire.
     """
-    if not est_marie:
+    if not est_marie or not QUESTIONNAIRE_MARIES_REDUIT:
         return list(CONFIG[bloc])
     return [q for q in CONFIG[bloc]
             if q["cle"] not in QUESTIONS_RETIREES_AUX_MARIES
@@ -454,7 +473,7 @@ def _reponses_pour_le_modele(ligne) -> dict:
     n'ont pas eu à saisir, y est ajouté. Rien n'est écrit en retour.
     """
     reponses = json.loads(ligne.reponses_json or "{}")
-    if ligne.est_marie:
+    if ligne.est_marie and QUESTIONNAIRE_MARIES_REDUIT:
         reponses["lien"] = lien_des_maries(ligne.genre)
     return reponses
 
@@ -554,7 +573,7 @@ def _reponses_du_formulaire(donnees: dict, bloc: str,
     reponses = {}
     # EX-MAR-02 — l'allégeance est écrite d'office, avant toute lecture du
     # formulaire : posée après, une valeur envoyée à la main l'écraserait.
-    if est_marie:
+    if est_marie and QUESTIONNAIRE_MARIES_REDUIT:
         reponses.update(REPONSES_FORCEES_AUX_MARIES)
     for question in questions_du_bloc(bloc, est_marie):
         prealable = question.get("prealable")

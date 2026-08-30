@@ -50,7 +50,16 @@ import photos
 import taches
 
 RACINE = os.path.dirname(os.path.abspath(__file__))
-MAX_GENERATIONS = 3
+# Lu dans `config.yaml`, relu à chaud comme les quotas de photo : la clé
+# `quotas.generations_par_personne` existait dans le fichier et **n'était lue
+# nulle part**, si bien que la changer sur le volume n'aurait rien fait. Une
+# clé décorative est pire qu'une clé absente — on croit avoir réglé quelque
+# chose. Le défaut reste 3, valeur du banc d'essai.
+def max_generations() -> int:
+    return int(config.parametre("quotas.generations_par_personne", 3))
+
+
+MAX_GENERATIONS = 3  # conservé pour les tests et les comparaisons de bornes
 
 # Prénoms des mariés : en variables d'environnement, jamais dans le dépôt, pour
 # que l'outil serve à un autre mariage sans toucher au code ni à la config.
@@ -945,7 +954,7 @@ def _contexte_portrait(request: Request, ligne) -> dict:
     durée du seul appel réussi.
     """
     contexte = {"request": request, "p": ligne,
-                "max_generations": MAX_GENERATIONS,
+                "max_generations": max_generations(),
                 "nb_bonus_mot": nb_bonus_mot(bool(ligne.est_marie)),
                 "motifs": CONFIG.get("motifs_reprise", []),
                 # EX-PHO-10 laisse TOUJOURS une fenêtre où la photo est reçue
@@ -997,7 +1006,7 @@ async def regenerer(request: Request, identifiant: str):
     # Un échec ne débite rien : on autorise la relance tant que le quota de
     # portraits obtenus n'est pas atteint, avec un garde-fou technique contre
     # la boucle infinie d'appels payants.
-    if (ligne.nb_generations < MAX_GENERATIONS
+    if (ligne.nb_generations < max_generations()
             and ligne.nb_tentatives < bd.MAX_TENTATIVES):
         _lancer_generation(identifiant, motif=motif)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
@@ -1023,7 +1032,7 @@ def reprendre(request: Request, identifiant: str):
         raise HTTPException(status_code=404, detail="Introuvable")
     # Reprendre sans pouvoir régénérer n'aurait pas de sens : le portrait
     # resterait celui des anciennes réponses.
-    if ligne.nb_generations >= MAX_GENERATIONS:
+    if ligne.nb_generations >= max_generations():
         return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
 
     questions = questions_du_bloc("obligatoires", bool(ligne.est_marie))
@@ -1045,7 +1054,7 @@ def reprendre(request: Request, identifiant: str):
             "facultatif": False,
             "reprise": True,
             "retour_vers": f"/portrait/{identifiant}",
-            "restantes": MAX_GENERATIONS - ligne.nb_generations,
+            "restantes": max_generations() - ligne.nb_generations,
         },
     )
 
@@ -1064,7 +1073,7 @@ async def enregistrer_reprise(request: Request, identifiant: str):
     bd.reprendre_reponses(identifiant, reponses)
     # EX-IA-04 — modifier ses réponses puis régénérer consomme la même unité
     # que régénérer sans rien changer.
-    if (ligne.nb_generations < MAX_GENERATIONS
+    if (ligne.nb_generations < max_generations()
             and ligne.nb_tentatives < bd.MAX_TENTATIVES):
         _lancer_generation(identifiant)
     return RedirectResponse(f"/portrait/{identifiant}", status_code=303)
@@ -1867,7 +1876,7 @@ def _fiche(ligne, onglet: str = "portrait") -> dict:
                          if kv[0] in intitules else 999)],
         "photo": photos.courante(ligne.personne_uuid),
         "budget_photo": photos.budget(ligne.personne_uuid),
-        "max_generations": MAX_GENERATIONS,
+        "max_generations": max_generations(),
         "motifs": CONFIG.get("motifs_reprise", []),
         "codes_lieux": CODES_LIEUX,
         "peuples": CONFIG.get("peuples", []),
@@ -2030,8 +2039,16 @@ async def admin_regenerer(request: Request, identifiant: str,
 
     Ni le quota de l'invité ni `MAX_TENTATIVES` ne s'y opposent. Le second est
     un garde-fou contre une BOUCLE d'appels payants ; un administrateur qui
-    appuie sur un bouton n'est pas une boucle, c'est un acte par appui. Ce qui
-    protège la dépense reste `ia.plafond_appels`, et lui n'est jamais levé.
+    appuie sur un bouton n'est pas une boucle, c'est un acte par appui.
+
+    **Rien d'autre ne protège la dépense.** `ia.plafond_appels` figure dans
+    `config.yaml` et dans `EX-IA-18`, mais **aucun code ne le lit** — je l'ai
+    écrit ici le 30 août en croyant le contraire. Ce qui borne réellement les
+    appels, c'est la conjonction de trois choses : un appui humain par
+    régénération, l'index unique partiel d'`EX-IA-43` qui interdit deux
+    générations en file pour une même chronique, et `MAX_TENTATIVES` côté
+    invité. C'est étroit mais réel ; le tableau de bord affiche le compte
+    d'appels pour que la dérive se voie.
     """
     ligne = _chronique_ou_404(identifiant)
     donnees = await request.form()
@@ -2137,7 +2154,7 @@ def admin_etat_chronique(request: Request, identifiant: str,
     ligne = _chronique_ou_404(identifiant)
     return gabarits.TemplateResponse(
         "fragment_admin_etat.html",
-        {"request": request, "p": ligne, "max_generations": MAX_GENERATIONS,
+        {"request": request, "p": ligne, "max_generations": max_generations(),
          "max_tentatives": bd.MAX_TENTATIVES})
 
 

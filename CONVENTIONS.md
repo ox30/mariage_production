@@ -692,6 +692,14 @@ l'endroit où la règle avait été collée, pas par sa spécificité — et la 
 qui retirait `a.action:visited` ne cassait rien. Dépendre de l'ordre, c'est
 dépendre de l'endroit où quelqu'un posera la prochaine règle.
 
+**Une clé de configuration décorative est pire qu'une clé absente.** Le
+30 août, `quotas.generations_par_personne` figurait dans `config.yaml` et
+n'était lue nulle part : `MAX_GENERATIONS` valait 3 en dur. La changer sur le
+volume n'aurait rien fait, et **on aurait cru avoir réglé quelque chose**. Une
+sonde vérifie désormais que chaque clé du modèle est lue par le code, ou porte
+la mention `NON LUE PAR LE CODE` à l'endroit même où elle est écrite. Deux
+clés l'ont été de ce fait : `ia.plafond_appels` et `tables.nombre`.
+
 **Un test qui interdit une chaîne la contient forcément.** Le 30 août,
 `test_maries.py` vérifiait qu'aucun fichier ne cite `mot_de_passe_maries` — et
 s'accusait lui-même. S'exclure du balayage est nécessaire, mais il faut alors
@@ -791,3 +799,5 @@ identique, et un échec des deux destinations serait pris pour un succès.
 | `EX-ADM-08` — l'export imprimable se réduit au mot de passe d'accès | les dix codes de Gardien et celui des mariés n'existent plus. Le mot de passe vit dans `config.yaml` et s'écrit en clair au journal de démarrage : c'est lui qui rend la bascule vérifiable d'un coup d'œil | accepté tel quel |
 | `EX-KSK-01` à `EX-KSK-11` — le poste kiosque n'est pas installé sur place | les invités sans téléphone ne seront pas présents. Le Raspberry Pi reste à domicile et ne fait plus que tirer une archive de l'application à intervalle régulier : il devient une **troisième copie**, hors Railway et hors Cloudflare, que ni l'une ni l'autre ne fournissait | à préciser hors étape 3 |
 | Le défaut de la phase de soirée est **ouvert** | inversion assumée de la règle du défaut sûr : oublier de fermer laisse écrire des gens bornés par leurs quotas, oublier d'ouvrir laisse quatre-vingt-treize personnes devant une porte close le soir même. Le second est catastrophique, le premier bénin | accepté tel quel |
+| `EX-IA-18` — le coupe-circuit de coût n'est pas implémenté | `ia.plafond_appels` figure dans `config.yaml` et n'est lu par aucun code, constaté le 30 août. Ce qui borne réellement les appels : un appui humain par régénération, l'index unique partiel d'`EX-IA-43` qui interdit deux générations en file pour une même chronique, et `MAX_TENTATIVES` côté invité. Poser un plafond dur à six jours de l'événement risquerait davantage d'arrêter une soirée qui fonctionne que d'attraper une boucle que la file rend déjà impossible | après l'événement |
+| `tables.nombre` n'est lu par aucun code | le nombre de tables se dérive de celles qui existent en base, semées par l'import du tableur. La clé est **signalée comme telle dans le modèle**, et une sonde refuse désormais toute clé de configuration non lue et non signalée | accepté tel quel |

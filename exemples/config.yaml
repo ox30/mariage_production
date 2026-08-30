@@ -73,6 +73,10 @@ ia:
   # Coupe-circuit de coût. ATTENTION : le plafond réel de l'API est propre au
   # COMPTE, pas au service — des essais sur le banc consomment le même budget
   # et les mêmes limites de débit que la production (EX-IA-18).
+  # NON LUE PAR LE CODE — EX-IA-18 n'est pas implémentée. Ce qui borne
+  # réellement les appels : un appui humain par régénération, l'index unique
+  # partiel d'EX-IA-43 qui interdit deux générations en file pour une même
+  # chronique, et MAX_TENTATIVES côté invité. La changer ici ne fait rien.
   plafond_appels: 500
 
 worker:
@@ -87,6 +91,8 @@ sauvegarde:
   destinations: [railway, r2]
 
 tables:
+  # NON LUE PAR LE CODE — le nombre de tables se dérive de celles qui existent
+  # en base, semées par l'import du tableur. La changer ici ne fait rien.
   nombre: 10
 
 # Table de test test_01 à test_10, qui reste ACTIVE dans le projet de

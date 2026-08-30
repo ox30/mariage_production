@@ -330,3 +330,53 @@ with bd.Seance() as seance:
 assert bd.chronique_de_personne(uuid_orphelin) is None
 
 print("TOUT PASSE — le lien mène à la chronique actuelle, jamais à l'ancienne")
+
+
+# --- les quotas du fichier doivent être VRAIS ---------------------------- #
+
+# *Constaté le 30 août :* `quotas.generations_par_personne` figurait dans
+# `config.yaml` et n'était lue nulle part — `MAX_GENERATIONS` valait 3 en dur.
+# Une clé décorative est pire qu'une clé absente : on croit avoir réglé quelque
+# chose. Le sondage vérifie donc que CHAQUE clé du modèle est lue par le code,
+# ou porte la mention qui dit qu'elle ne l'est pas.
+
+import pathlib as _pathlib
+import re as _re
+import yaml as _yaml
+
+_exemple = _pathlib.Path("exemples/config.yaml")
+_modele = _yaml.safe_load(_exemple.read_text(encoding="utf-8"))
+_source = "\n".join(p.read_text(encoding="utf-8") for p in
+                    _pathlib.Path(".").glob("*.py")
+                    if not p.name.startswith("test_"))
+_texte_exemple = _exemple.read_text(encoding="utf-8")
+
+_decoratives = []
+for _bloc in ("quotas", "ia", "worker", "sauvegarde", "table_test", "tables"):
+    for _cle in (_modele.get(_bloc) or {}):
+        _chemin = f"{_bloc}.{_cle}"
+        if f'"{_chemin}"' in _source:
+            continue
+        # Une clé non lue est tolérée SI le fichier le dit à l'endroit même où
+        # elle est écrite — sinon elle ment par omission.
+        if "NON LUE" in _texte_exemple.split(f"{_cle}:")[0].rsplit("\n\n", 1)[-1]:
+            continue
+        _decoratives.append(_chemin)
+
+assert not _decoratives, (
+    "clé(s) de configuration que le code ne lit pas et que le modèle ne "
+    "signale pas :\n  " + "\n  ".join(_decoratives))
+assert len(_modele["quotas"]) >= 6, len(_modele["quotas"])
+
+# Et celle qui vient d'être branchée l'est vraiment, à chaud.
+import config as _config
+_vrai = _config.parametre
+_config.parametre = lambda c, d=None: (7 if c == "quotas.generations_par_personne"
+                                       else _vrai(c, d))
+try:
+    assert main.max_generations() == 7
+finally:
+    _config.parametre = _vrai
+assert main.max_generations() == 3
+
+print("TOUT PASSE — aucune clé de configuration ne ment par omission")

@@ -20,6 +20,11 @@ from __future__ import annotations
 
 import json
 import random
+import re
+import unicodedata
+import difflib
+import time
+from dataclasses import dataclass
 from datetime import datetime
 
 from alembic import command
@@ -30,7 +35,8 @@ from sqlalchemy.orm import Session, sessionmaker
 import config
 import modeles
 import noms
-from modeles import Chronique, Journal, Personne
+from modeles import (Appareil, Chronique, Journal, Personne, Region,
+                     TableGroupe)
 
 CHEMIN = str(config.projet().chemin_base)
 
@@ -92,11 +98,28 @@ def initialiser() -> None:
 # Compteurs dérivés
 # --------------------------------------------------------------------------- #
 
-def _compter(seance: Session, chronique_uuid: str, action: str) -> int:
+def borne_de_remise(seance: Session, ancre: str, action: str,
+                    colonne=Journal.objet_uuid):
+    """Horodatage de la dernière remise à zéro, ou None.
+
+    Une remise à zéro est une **date**, pas une quantité : tout ce qui la
+    précède ne compte plus. C'est ce qui la rend idempotente — deux appuis
+    posent deux bornes, la dernière gagne, le résultat est identique. Des
+    lignes de compensation, elles, s'additionneraient.
+    """
     return seance.scalar(
-        select(func.count()).select_from(Journal)
-        .where(Journal.objet_uuid == chronique_uuid, Journal.action == action)
-    ) or 0
+        select(func.max(Journal.horodatage))
+        .where(colonne == ancre, Journal.action == action))
+
+
+def _compter(seance: Session, chronique_uuid: str, action: str,
+             depuis=None) -> int:
+    requete = (select(func.count()).select_from(Journal)
+               .where(Journal.objet_uuid == chronique_uuid,
+                      Journal.action == action))
+    if depuis is not None:
+        requete = requete.where(Journal.horodatage > depuis)
+    return seance.scalar(requete) or 0
 
 
 def compteurs(seance: Session, chronique_uuid: str) -> tuple[int, int]:
@@ -105,8 +128,19 @@ def compteurs(seance: Session, chronique_uuid: str) -> tuple[int, int]:
     Le premier consomme le quota de l'invité, le second est un garde-fou
     technique. Les deux sont dérivés : aucune colonne ne les porte
     (EX-GEN-07, EX-IA-21).
+
+    **`nb_tentatives` ignore la remise à zéro, et c'est voulu.** Rendre ses
+    crédits à un invité ne doit pas rouvrir la porte à une chronique
+    empoisonnée qui rappellerait l'API en boucle : le quota est une courtoisie,
+    le garde-fou technique n'en est pas une.
     """
-    return (_compter(seance, chronique_uuid, Journal.CHRONIQUE_GENEREE),
+    depuis = borne_de_remise(seance, chronique_uuid,
+                             Journal.CHRONIQUE_CREDITS_REMIS)
+    obtenus = (_compter(seance, chronique_uuid, Journal.CHRONIQUE_GENEREE,
+                        depuis)
+               - _compter(seance, chronique_uuid, Journal.CHRONIQUE_CREDITEE,
+                          depuis))
+    return (max(0, obtenus),
             _compter(seance, chronique_uuid, Journal.CHRONIQUE_TENTEE))
 
 
@@ -148,11 +182,27 @@ def _cle_nom(prenom: str, nom: str) -> tuple[str, str]:
     return noms.capitaliser(prenom), noms.capitaliser(nom)
 
 
-def personne_par_nom(seance: Session, prenom: str, nom: str) -> Personne | None:
+def personnes_par_nom(seance: Session, prenom: str, nom: str) -> list[Personne]:
+    """**Une liste**, jamais un objet seul.
+
+    `personne_par_nom` faisait un `scalar()` : avec deux personnes du même nom
+    en base, il en renvoyait silencieusement la première. Or l'import va
+    produire exactement ce cas — `EX-ADM-13` autorise deux homonymes distingués
+    par leur colonne `Identifiant`, et c'est même la seule raison d'être de
+    cette colonne. La seconde Marie Meyer à se présenter aurait été reconduite
+    vers la chronique de la première, sans un mot.
+
+    Rendre une liste force l'appelant à trancher — ce qui est précisément
+    `EX-AUTH-05`. L'ordre est stable pour que deux affichages successifs de
+    l'écran de confirmation ne permutent pas les deux choix sous le doigt.
+    """
     prenom, nom = _cle_nom(prenom, nom)
-    return seance.scalar(
-        select(Personne).where(Personne.prenom == prenom, Personne.nom == nom)
-    )
+    return list(seance.scalars(
+        select(Personne)
+        .where(Personne.prenom == prenom, Personne.nom == nom,
+               Personne.active.is_(True))
+        .order_by(Personne.identifiant_import, Personne.uuid)
+    ))
 
 
 def creer_personne(seance: Session, prenom: str, nom: str,
@@ -175,6 +225,30 @@ def creer_personne(seance: Session, prenom: str, nom: str,
 # Assignation du lieu
 # --------------------------------------------------------------------------- #
 
+def _effectifs(seance: Session, codes_lieux: list[str]) -> dict[str, int]:
+    """Combien de chroniques vivantes par lieu.
+
+    Extrait pour servir aux DEUX usages — l'équilibrage et l'affichage à côté
+    du champ de l'administrateur. Deux calculs séparés divergeraient au premier
+    changement de règle, sur l'exclusion des chroniques masquées par exemple.
+    """
+    effectifs = {code: 0 for code in codes_lieux}
+    for code, total in seance.execute(
+        select(Chronique.lieu, func.count())
+        .where(Chronique.supprimee.is_(False))
+        .group_by(Chronique.lieu)
+    ):
+        if code in effectifs:
+            effectifs[code] = total
+    return effectifs
+
+
+def effectifs_par_lieu(codes_lieux: list[str] | None = None) -> dict[str, int]:
+    """Le même décompte, ouvert aux appelants qui n'ont pas de séance."""
+    with Seance() as seance:
+        return _effectifs(seance, list(codes_lieux or CODES_LIEUX_CONNUS))
+
+
 def assigner_lieu(seance: Session, codes_lieux: list[str]) -> str:
     """Le lieu le moins peuplé ; tirage au sort en cas d'égalité (EX-IA-06).
 
@@ -186,14 +260,7 @@ def assigner_lieu(seance: Session, codes_lieux: list[str]) -> str:
     elle-même un indice, alors qu'une grappe due au hasard est indiscernable
     d'un plan de table.
     """
-    effectifs = {code: 0 for code in codes_lieux}
-    for code, total in seance.execute(
-        select(Chronique.lieu, func.count())
-        .where(Chronique.supprimee.is_(False))
-        .group_by(Chronique.lieu)
-    ):
-        if code in effectifs:
-            effectifs[code] = total
+    effectifs = _effectifs(seance, codes_lieux)
     minimum = min(effectifs.values())
     return random.choice([c for c, n in effectifs.items() if n == minimum])
 
@@ -202,27 +269,27 @@ def assigner_lieu(seance: Session, codes_lieux: list[str]) -> str:
 # Chroniques
 # --------------------------------------------------------------------------- #
 
-def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
-          etat: str = "en_attente", genre: str | None = None) -> str:
-    """Crée la personne si nécessaire, puis sa chronique.
+def creer(personne_uuid: str, reponses: dict, codes_lieux: list[str],
+          etat: str = "en_attente", appareil_uuid: str | None = None) -> str:
+    """Crée la chronique d'une personne **déjà résolue**.
 
-    EX-IA-26 — **une seule chronique par personne.** Une deuxième tentative de
-    création reconduit vers la chronique existante, qui se modifie et se
-    régénère dans la limite des trois générations. Deux chroniques
-    produiraient deux marqueurs sur la carte, dont un que les mariés ne
-    pourraient jamais deviner.
+    La signature ne prend plus (prénom, nom) : l'identité se résout en amont,
+    à l'écran d'identité, et une résolution par le nom refaite ici serait une
+    seconde source de vérité — celle-là même qui confondait deux homonymes.
 
-    Le rapprochement se fait sur le couple (prénom, nom) normalisé. La
-    détection de doublon approximative avec confirmation (EX-AUTH-05) et la
-    sélection dans la liste importée (EX-AUTH-19) viennent à l'étape 2 : d'ici
-    là, deux homonymes réels seraient confondus.
+    EX-IA-26 — **une seule chronique par personne.** Une deuxième demande
+    reconduit vers la chronique existante, qui se modifie et se régénère dans
+    la limite des trois générations. Deux chroniques produiraient deux
+    marqueurs sur la carte, dont un que les mariés ne pourraient jamais
+    deviner.
+
+    EX-AUTH-06 — `appareil_uuid` est figé **à la création**. Changer d'identité
+    ensuite ne réécrit aucun objet déjà créé.
     """
     with Seance() as seance:
-        personne = personne_par_nom(seance, prenom, nom)
+        personne = seance.get(Personne, personne_uuid)
         if personne is None:
-            personne = creer_personne(seance, prenom, nom, genre=genre)
-        elif genre in ("masculin", "feminin") and personne.genre != genre:
-            personne.genre = genre
+            raise ValueError(f"personne inconnue : {personne_uuid}")
 
         existante = seance.scalar(
             select(Chronique).where(Chronique.personne_uuid == personne.uuid,
@@ -230,9 +297,7 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
         if existante is not None:
             # « Reconduit vers », et non « écrase ». Rien n'est touché : ni les
             # réponses, ni l'étage, ni le quota. Les réponses sont la seule
-            # chose irremplaçable du projet (EX-GEN-08) ; les remplacer parce
-            # que quelqu'un a ressaisi son nom serait la pire des portes
-            # dérobées.
+            # chose irremplaçable du projet (EX-GEN-08).
             #
             # Défaut constaté le 20 août : un second passage sous le même nom
             # avait effacé sept réponses et cinq complémentaires, consommé une
@@ -242,6 +307,8 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
 
         chronique = Chronique(
             personne_uuid=personne.uuid,
+            appareil_uuid=appareil_uuid,
+            est_test=personne.est_test,
             lieu=assigner_lieu(seance, codes_lieux),
             reponses_json=json.dumps(reponses, ensure_ascii=False),
             etat=etat,
@@ -251,30 +318,528 @@ def creer(prenom: str, nom: str, reponses: dict, codes_lieux: list[str],
         return chronique.uuid
 
 
-def chronique_de(prenom: str, nom: str) -> str | None:
+def chronique_de_personne(personne_uuid: str) -> str | None:
     """L'identifiant de la chronique de cette personne, si elle en a une.
 
-    Interrogée dès la saisie du nom, pour reconduire l'invité vers son
-    personnage au lieu de lui faire répondre sept questions qui seraient
-    ensuite ignorées (EX-IA-26). L'écran à deux entrées d'EX-AUTH-09 et la
-    confirmation de doublon d'EX-AUTH-05 viennent à l'étape 2 ; d'ici là,
-    cette reconduction est ce qui protège les réponses déjà données.
+    Prend un uuid et non un nom : c'est ce qui distingue deux homonymes.
     """
-    if not prenom.strip() or not nom.strip():
-        return None
     with Seance() as seance:
-        personne = personne_par_nom(seance, prenom, nom)
-        if personne is None:
-            return None
         return seance.scalar(
             select(Chronique.uuid).where(
-                Chronique.personne_uuid == personne.uuid,
+                Chronique.personne_uuid == personne_uuid,
                 Chronique.supprimee.is_(False)))
+
+
+# --------------------------------------------------------------------------- #
+# Résolution de l'identité
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class Resolution:
+    """Ce que la saisie d'un nom a donné, sans décider de la suite.
+
+    Trois issues, et l'appelant les traite différemment : aucune personne
+    (création), une seule (le cas courant), plusieurs (`EX-AUTH-05` — il faut
+    demander laquelle). Renvoyer un objet plutôt qu'une personne évite que
+    l'appelant confonde « personne unique » et « première de plusieurs ».
+    """
+
+    candidates: list[Personne]
+
+    @property
+    def unique(self) -> Personne | None:
+        return self.candidates[0] if len(self.candidates) == 1 else None
+
+    @property
+    def ambigue(self) -> bool:
+        return len(self.candidates) > 1
+
+
+def resoudre(prenom: str, nom: str) -> Resolution:
+    """EX-AUTH-05 — qui répond à ce nom ? Sans rien créer ni choisir.
+
+    Le nom de famille peut être vide : sur la vraie liste, 48 invités sur 93
+    n'en avaient pas, et l'import les accepte désormais. Le prénom, lui, reste
+    exigé — sans lui il ne reste rien à quoi rattacher une chronique.
+    """
+    if not prenom.strip():
+        return Resolution([])
+    with Seance() as seance:
+        candidates = personnes_par_nom(seance, prenom, nom)
+        for personne in candidates:
+            # Attaché à la lecture pour que l'écran de choix puisse dire ce qui
+            # distingue les candidates : celle qui a déjà un personnage, et
+            # celle qui n'en a pas.
+            personne.a_une_chronique = seance.scalar(
+                select(func.count()).select_from(Chronique)
+                .where(Chronique.personne_uuid == personne.uuid,
+                       Chronique.supprimee.is_(False))) > 0
+        return Resolution(candidates)
+
+
+# EX-AUTH-05 — seuil de ressemblance des noms.
+#
+# **Mesuré des deux côtés.** Sur la liste réelle de 93 invités, aucun seuil
+# entre 0,75 et 0,90 ne produit le moindre rapprochement par distance
+# d'édition : les homonymes de nom de famille y portent des prénoms trop
+# éloignés. Le seuil ne coûte donc rien en faux positifs sur cette liste — mais
+# il fallait encore vérifier qu'il attrape ce qu'il vise, et 0,85 ne
+# l'attrapait pas :
+#
+#     meyer / meier    0,800   ← le cas cité par le briefing
+#     meyer / mayer    0,800
+#     durand / durant  0,833
+#     schaer / schar   0,909
+#     meyer / muller   0,545   ← doit rester rejeté
+#     dupont / durand  0,500   ← doit rester rejeté
+#
+# 0,75 laisse plus de trois cents millièmes entre le dernier cas visé et le
+# premier cas à rejeter. Un seuil se choisit sur les deux bords, pas sur un
+# seul : mesuré sur les seuls faux positifs, 0,85 semblait gratuit et rejetait
+# pourtant l'exemple du cahier des charges.
+SEUIL_RESSEMBLANCE = 0.75
+
+
+def _cle_floue(valeur: str) -> str:
+    """Casse, accents, traits d'union et apostrophes retirés.
+
+    « Jean-Pierre », « jean pierre » et « JEANPIERRE » se comparent alors, ce
+    qui compte : une liste tapée sur trois claviers par quatre personnes n'a
+    aucune chance d'être homogène.
+    """
+    depouille = unicodedata.normalize("NFKD", str(valeur or "").strip().lower())
+    depouille = "".join(c for c in depouille if not unicodedata.combining(c))
+    return " ".join(depouille.replace("-", " ").replace("'", " ").split())
+
+
+def _ressemblent(a: str, b: str) -> bool:
+    return difflib.SequenceMatcher(None, a, b).ratio() >= SEUIL_RESSEMBLANCE
+
+
+def rapprochements(prenom: str, nom: str,
+                   sauf_uuid: str | None = None) -> list[tuple[Personne, str]]:
+    """EX-AUTH-05 — « un Jean-Pierre Meier existe déjà, c'est vous ? »
+
+    **Jamais flou sur les deux composantes à la fois.** Dans un mariage, la même
+    famille produit dix personnes du même nom : un flou simultané rapprocherait
+    « Marie Meyer » de « Marc Meyer », qui sont deux personnes, et noierait
+    l'invité sous des confirmations. Trois règles, chacune exigeant une
+    composante exacte :
+
+    1. nom identique, prénom proche — « Jean-Pierre » / « Jean-Pierre »
+    2. prénom identique, nom proche — « Meier » / « Meyer »
+    3. prénom identique, nom **absent en base** — le cas de 48 invités sur 93,
+       dont on ne connaissait pas le nom au moment de l'import. Sans elle,
+       « Coralie » qui tape « Coralie Berthoud » créerait un doublon, la
+       comparaison de `""` avec `Berthoud` ne ressemblant à rien.
+
+    Le coût d'une confirmation en trop est un geste ; celui d'un faux négatif,
+    deux personnages pour une personne, dont un que les mariés ne pourront
+    jamais deviner.
+    """
+    cle_prenom, cle_nom = _cle_floue(prenom), _cle_floue(nom)
+    if not cle_prenom:
+        return []
+    trouves = []
+    with Seance() as seance:
+        for personne in seance.scalars(
+                select(Personne).where(Personne.active.is_(True))
+                .order_by(Personne.prenom, Personne.nom)):
+            if personne.uuid == sauf_uuid:
+                continue
+            autre_prenom = _cle_floue(personne.prenom)
+            autre_nom = _cle_floue(personne.nom)
+            if (autre_prenom, autre_nom) == (cle_prenom, cle_nom):
+                continue  # identique : ce n'est pas un rapprochement, c'est elle
+            motif = None
+            if cle_nom and autre_nom == cle_nom and _ressemblent(cle_prenom,
+                                                                 autre_prenom):
+                motif = "prenom_proche"
+            elif autre_prenom == cle_prenom and cle_nom and autre_nom \
+                    and _ressemblent(cle_nom, autre_nom):
+                motif = "nom_proche"
+            elif autre_prenom == cle_prenom and not autre_nom:
+                motif = "nom_absent"
+            if motif:
+                personne.nom_table = _nom_table(seance, personne.table_uuid)
+                personne.a_une_chronique = seance.scalar(
+                    select(Chronique.uuid).where(
+                        Chronique.personne_uuid == personne.uuid,
+                        Chronique.supprimee.is_(False))) is not None
+                trouves.append((personne, motif))
+    return trouves
+
+
+def _nom_table(seance, table_uuid: str | None) -> str:
+    if not table_uuid:
+        return ""
+    table = seance.get(TableGroupe, table_uuid)
+    return table.nom if table else ""
+
+
+def annuaire() -> list[dict]:
+    """Toute la liste, groupée par table, pour l'écran de sélection.
+
+    Envoyée **entière** dans la page : 93 noms font deux kilo-octets, le filtre
+    se fait alors sans requête, et il fonctionne même si la 4G de la salle
+    flanche. Une recherche côté serveur ferait un aller-retour par frappe.
+
+    EX-AUTH-16 — cette liste ne sert qu'à trouver sa propre identité.
+    """
+    with Seance() as seance:
+        avec_chronique = set(seance.scalars(
+            select(Chronique.personne_uuid).where(
+                Chronique.supprimee.is_(False))))
+        tables = {t.uuid: t for t in seance.scalars(select(TableGroupe))}
+        gens = []
+        for personne in seance.scalars(
+                select(Personne).where(Personne.active.is_(True),
+                                       Personne.est_test.is_(False))
+                .order_by(Personne.prenom, Personne.nom)):
+            table = tables.get(personne.table_uuid)
+            gens.append({
+                "uuid": personne.uuid,
+                "prenom": personne.prenom,
+                "nom": personne.nom,
+                "table": table.nom if table else "",
+                "code_table": table.code if table else "",
+                "a_une_chronique": personne.uuid in avec_chronique,
+            })
+    # Les tables numériques d'abord dans leur ordre naturel — « 10 » après
+    # « 9 » —, puis celles qui n'en sont pas, puis les sans-table.
+    def rang(gens_de_table):
+        code = gens_de_table[0]
+        return (0, int(code), "") if code.isdigit() else (1 if code else 2, 0, code)
+
+    groupes: dict[tuple, list] = {}
+    for personne in gens:
+        groupes.setdefault((personne["code_table"], personne["table"]),
+                           []).append(personne)
+    return [{"code": code, "nom": nom or "Sans table", "gens": membres}
+            for (code, nom), membres in sorted(groupes.items(),
+                                               key=lambda p: rang(p[0]))]
+
+
+def completer_nom(personne_uuid: str, prenom: str, nom: str) -> bool:
+    """Laisse l'invité corriger ce que l'import ne savait pas.
+
+    Quarante-huit personnes ont été importées sans nom de famille. Plutôt que
+    de laisser ces lacunes jusqu'au bout, l'écran de confirmation propose de
+    les combler — la base s'enrichit d'elle-même pendant la soirée.
+
+    EX-AUTH-21 — capitalisé ici comme à la création, une seule fois.
+    """
+    prenom, nom = prenom.strip(), nom.strip()
+    if not prenom:
+        return False
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None:
+            return False
+        avant = (personne.prenom, personne.nom)
+        personne.prenom = noms.capitaliser(prenom)
+        personne.nom = noms.capitaliser(nom)
+        if (personne.prenom, personne.nom) != avant:
+            journaliser(seance, Journal.NOM_COMPLETE, objet_uuid=personne_uuid,
+                        objet_type="personne", acteur=personne_uuid,
+                        details={"avant": f"{avant[0]} {avant[1]}".strip(),
+                                 "apres": f"{personne.prenom} {personne.nom}".strip()})
+        seance.commit()
+    return True
+
+
+def affecter_table(personne_uuid: str, code_table: str) -> bool:
+    """La table de qui s'ajoute à la volée — facultative.
+
+    Sans elle, une personne ajoutée le soir même est impossible à situer pour
+    les mariés. Avec, elle se distingue de son homonyme d'une autre table.
+    """
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None:
+            return False
+        if not code_table.strip():
+            seance.commit()
+            return True
+        table = seance.scalar(select(TableGroupe)
+                              .where(TableGroupe.code == code_table.strip()))
+        if table is None:
+            return False
+        personne.table_uuid = table.uuid
+        seance.commit()
+    return True
+
+
+def creer_personne_libre(prenom: str, nom: str,
+                         genre: str | None = None) -> str:
+    """EX-AUTH-19 — la saisie libre, pour qui n'est pas dans la liste."""
+    with Seance() as seance:
+        personne = creer_personne(seance, prenom, nom, genre=genre,
+                                  source="saisie_libre")
+        journaliser(seance, Journal.PERSONNE_CREEE, objet_uuid=personne.uuid,
+                    objet_type="personne", acteur=personne.uuid,
+                    details={"source": "saisie_libre"})
+        seance.commit()
+        return personne.uuid
+
+
+# --------------------------------------------------------------------------- #
+# Les régions telles qu'on les affiche (EX-ADM-22)
+# --------------------------------------------------------------------------- #
+
+# Relues à chaud, avec un cache court : `libelle_lieu` est appelé plusieurs fois
+# par page, et une requête par appel coûterait plus que la fraîcheur ne vaut.
+# Dix secondes, comme `config.parametre` — un renommage fait à 21 h est visible
+# avant qu'on ait fini de reposer le téléphone.
+_CACHE_REGIONS: tuple[float, dict] = (0.0, {})
+DELAI_CACHE_REGIONS_S = 10.0
+
+
+def semer_regions(lieux: list[dict]) -> int:
+    """Sème la table depuis `questions.yaml` — les codes absents seulement.
+
+    Idempotent, et **non destructif** : un libellé déjà modifié depuis
+    l'administration n'est jamais réécrit par le fichier. Sans cela, chaque
+    redémarrage effacerait le travail de la soirée.
+    """
+    ajoutees = 0
+    with Seance() as seance:
+        for rang, lieu in enumerate(lieux):
+            code = lieu["code"]
+            if seance.get(Region, code) is not None:
+                continue
+            seance.add(Region(
+                code=code,
+                libelle=lieu["libelle"],
+                locution=lieu.get("locution") or f"à {lieu['libelle']}",
+                ombre=lieu.get("ombre") or "",
+                ordre=rang,
+            ))
+            ajoutees += 1
+        if ajoutees:
+            seance.commit()
+    _vider_cache_regions()
+    return ajoutees
+
+
+def _vider_cache_regions() -> None:
+    global _CACHE_REGIONS
+    _CACHE_REGIONS = (0.0, {})
+
+
+def regions() -> dict[str, dict]:
+    """`{code: {libelle, locution, ombre}}`, tel qu'affiché aujourd'hui."""
+    global _CACHE_REGIONS
+    age, valeur = _CACHE_REGIONS
+    if valeur and time.monotonic() - age < DELAI_CACHE_REGIONS_S:
+        return valeur
+    with Seance() as seance:
+        lues = {
+            r.code: {"libelle": r.libelle, "locution": r.locution,
+                     "ombre": r.ombre, "ordre": r.ordre}
+            for r in seance.scalars(select(Region).order_by(Region.ordre))
+        }
+    _CACHE_REGIONS = (time.monotonic(), lues)
+    return lues
+
+
+def modifier_region(code: str, libelle: str, locution: str, ombre: str) -> bool:
+    """EX-ADM-22 — renommer en pleine soirée, sans toucher aux chroniques.
+
+    `chronique.lieu` porte le code : aucune chronique déjà produite ne devient
+    orpheline, et aucune ne change de région (EX-IA-28).
+    """
+    with Seance() as seance:
+        region = seance.get(Region, code)
+        if region is None:
+            return False
+        region.libelle = libelle.strip() or region.libelle
+        region.locution = locution.strip() or region.locution
+        region.ombre = ombre.strip()
+        journaliser(seance, Journal.REGION_MODIFIEE, objet_uuid=code,
+                    objet_type="region",
+                    details={"libelle": region.libelle,
+                             "locution": region.locution})
+        seance.commit()
+    _vider_cache_regions()
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# Les tables (EX-ADM-22, clin d'œil aux noms choisis par les mariés)
+# --------------------------------------------------------------------------- #
+
+def tables(avec_test: bool = False) -> list[dict]:
+    """Les tables avec leur effectif, dans l'ordre de leur code.
+
+    L'effectif se **compte**, il ne se stocke pas : une colonne de comptage se
+    désynchronise dès le premier import (EX-GEN-07).
+
+    EX-TST-04 — la table de test est exclue **par défaut**, comme `lister()` :
+    sans quoi elle s'offrirait à l'invité qui choisit sa table en saisie libre,
+    et il s'y placerait sans savoir ce qu'elle est. L'administration la demande
+    explicitement.
+    """
+    with Seance() as seance:
+        lues = []
+        requete = select(TableGroupe)
+        if not avec_test:
+            requete = requete.where(TableGroupe.est_test.is_(False))
+        for table in seance.scalars(requete):
+            effectif = seance.scalar(
+                select(func.count()).select_from(Personne)
+                .where(Personne.table_uuid == table.uuid,
+                       Personne.active.is_(True))) or 0
+            lues.append({"uuid": table.uuid, "code": table.code,
+                         "nom": table.nom, "effectif": effectif})
+    return sorted(lues, key=lambda t: (len(t["code"]), t["code"]))
+
+
+def renommer_table(uuid: str, nom: str) -> bool:
+    """Le CODE ne bouge jamais : c'est lui que porte le fichier Excel."""
+    nom = nom.strip()
+    if not nom:
+        return False
+    with Seance() as seance:
+        table = seance.get(TableGroupe, uuid)
+        if table is None:
+            return False
+        table.nom = nom
+        journaliser(seance, Journal.TABLE_RENOMMEE, objet_uuid=uuid,
+                    objet_type="table", details={"code": table.code, "nom": nom})
+        seance.commit()
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# La table de test (EX-TST-01 à EX-TST-08, EX-PRJ-10)
+# --------------------------------------------------------------------------- #
+
+CODE_TABLE_TEST = "test"
+NB_UTILISATEURS_TEST = 10
+
+
+def semer_table_test(actif: bool = True, combien: int = NB_UTILISATEURS_TEST) -> int:
+    """`test_01` à `test_10`, **actifs jusqu'en production** (EX-PRJ-10).
+
+    Le test de fumée du jour J se fait sur la vraie base, avec la vraie clé
+    d'API et le vrai modèle : une répétition sur un autre projet n'éprouverait
+    pas ce qui va servir. D'où des comptes de test qui survivent à la bascule,
+    et l'étanchéité qui va avec — `est_test` hérité par tout ce qu'ils créent,
+    et exclu de chaque liste et de chaque total (EX-TST-02 à EX-TST-08).
+
+    Idempotent : relancé, il ne double rien.
+    """
+    if not actif:
+        return 0
+    cree = 0
+    with Seance() as seance:
+        table = seance.scalar(select(TableGroupe)
+                              .where(TableGroupe.code == CODE_TABLE_TEST))
+        if table is None:
+            table = TableGroupe(code=CODE_TABLE_TEST, nom="Table de test",
+                                ordre=9999, est_test=True)
+            seance.add(table)
+            seance.flush()
+        table.est_test = True
+        for rang in range(1, combien + 1):
+            identifiant = f"test_{rang:02d}"
+            existante = seance.scalar(select(Personne).where(
+                Personne.identifiant_import == identifiant))
+            if existante is not None:
+                # Le drapeau est réaffirmé : une personne de test qui perdrait
+                # `est_test` apparaîtrait dans les listes et dans les totaux,
+                # et c'est le genre de chose qu'on ne remarque qu'après coup.
+                existante.est_test = True
+                existante.table_uuid = table.uuid
+                existante.active = True
+                continue
+            seance.add(Personne(prenom="Test", nom=f"{rang:02d}",
+                                identifiant_import=identifiant,
+                                table_uuid=table.uuid, est_test=True,
+                                source="import", active=True))
+            cree += 1
+        seance.commit()
+    return cree
+
+
+def mode_test_actif() -> bool:
+    """Vrai dès qu'une chronique de test existe — EX-TST-07, le bandeau.
+
+    **Dérivé, jamais déclaré.** Un interrupteur dirait ce qu'on a réglé ; ceci
+    dit ce qui est réellement en base. C'est la cinquième grandeur du projet à
+    suivre cette règle.
+    """
+    with Seance() as seance:
+        return seance.scalar(
+            select(Chronique.uuid).where(Chronique.est_test.is_(True),
+                                         Chronique.supprimee.is_(False))) is not None
+
+
+def definir_genre(personne_uuid: str, genre: str) -> None:
+    """EX-IA-36 — posé à l'écran d'identité, jamais dans le questionnaire.
+
+    Écrasable : quelqu'un qui se reprend doit pouvoir se corriger. Ce qui n'est
+    PAS écrasable, c'est ce qui a déjà été produit avec l'ancienne valeur — le
+    portrait déjà écrit reste tel quel jusqu'à une réécriture demandée.
+    """
+    if genre not in ("masculin", "feminin"):
+        return
+    with Seance() as seance:
+        p = seance.get(Personne, personne_uuid)
+        if p is not None and p.genre != genre:
+            p.genre = genre
+            seance.commit()
+
+
+def personne(personne_uuid: str) -> Personne | None:
+    with Seance() as seance:
+        return seance.get(Personne, personne_uuid)
+
+
+# --------------------------------------------------------------------------- #
+# Appareils — EX-AUTH-02 : un raccourci, jamais un droit
+# --------------------------------------------------------------------------- #
+
+def rattacher_appareil(appareil_uuid: str, personne_uuid: str) -> None:
+    """Mémorise « ce téléphone, c'est cette personne ».
+
+    Sa perte ne coûte aucun droit : on ressaisit le mot de passe, on retrouve
+    son nom, sa chronique et ses crédits (EX-AUTH-02, EX-AUTH-03). Le
+    rattachement se réécrit — un poste partagé change de main — mais les objets
+    déjà créés gardent l'appareil de leur création (EX-AUTH-06).
+    """
+    with Seance() as seance:
+        appareil = seance.get(Appareil, appareil_uuid)
+        if appareil is None:
+            seance.add(Appareil(uuid=appareil_uuid, personne_uuid=personne_uuid,
+                                premiere_vue=maintenant(),
+                                derniere_vue=maintenant()))
+        else:
+            appareil.personne_uuid = personne_uuid
+            appareil.derniere_vue = maintenant()
+        seance.commit()
+
+
+def personne_de_l_appareil(appareil_uuid: str | None) -> Personne | None:
+    if not appareil_uuid:
+        return None
+    with Seance() as seance:
+        appareil = seance.get(Appareil, appareil_uuid)
+        if appareil is None:
+            return None
+        return seance.get(Personne, appareil.personne_uuid)
 
 
 # Renseigné au démarrage par main.py, seul module qui lit questions.yaml.
 # `base_donnees` n'a pas à connaître le contenu éditorial du questionnaire.
 CLES_SECOND_ETAGE: set[str] = set()
+# Semé par `main` au démarrage, comme `CLES_SECOND_ETAGE` : `base_donnees` ne
+# lit pas `questions.yaml`, c'est `main` qui déclare ce qu'il sait.
+CODES_LIEUX_CONNUS: list[str] = []
+# Les clés dont la modification ne périme PAS un portrait : elles n'atteignent
+# jamais le modèle. Semé par `main` depuis `questions.yaml`.
+CLES_HORS_PORTRAIT: set[str] = set()
 
 
 def etage_des_reponses(reponses: dict) -> int:
@@ -303,14 +868,26 @@ def lire(identifiant: str) -> Chronique | None:
         chronique.prenom = personne.prenom
         chronique.nom = personne.nom
         chronique.genre = personne.genre
+        # EX-MAR-02/03/04 — le questionnaire réduit, l'exclusion du jeu et
+        # le lien injecté au prompt en dépendent tous les trois.
+        chronique.est_marie = bool(personne.est_marie)
         return _garnir(seance, chronique)
 
 
-def lister(seulement_validees: bool = False) -> list[Chronique]:
+def lister(seulement_validees: bool = False,
+           avec_test: bool = False) -> list[Chronique]:
+    """EX-TST-04, EX-TST-05 — la table de test est invisible par DÉFAUT.
+
+    L'inverse — visible sauf mention contraire — ferait apparaître dix
+    personnages fictifs sur la carte des mariés le jour où l'on oublierait le
+    drapeau quelque part. Le défaut sûr est celui qui protège quand on oublie.
+    """
     with Seance() as seance:
         requete = (select(Chronique, Personne)
                    .join(Personne, Personne.uuid == Chronique.personne_uuid)
                    .where(Chronique.supprimee.is_(False)))
+        if not avec_test:
+            requete = requete.where(Chronique.est_test.is_(False))
         if seulement_validees:
             requete = requete.where(Chronique.validee.is_(True),
                                     Chronique.portrait.is_not(None))
@@ -320,6 +897,9 @@ def lister(seulement_validees: bool = False) -> list[Chronique]:
             chronique.prenom = personne.prenom
             chronique.nom = personne.nom
             chronique.genre = personne.genre
+            # EX-MAR-02/03/04 — le questionnaire réduit, l'exclusion du jeu et
+            # le lien injecté au prompt en dépendent tous les trois.
+            chronique.est_marie = bool(personne.est_marie)
             sortie.append(_garnir(seance, chronique))
         return sortie
 
@@ -343,6 +923,48 @@ def noms_fictifs_pris(sauf: str | None = None) -> list[str]:
             if identifiant != sauf]
 
 
+def _cle_fictif(fragment: str) -> str:
+    """Même normalisation qu'`ia._normaliser` : accents dépouillés, minuscules.
+
+    Réécrite ici plutôt qu'importée : la persistance n'a pas à dépendre du
+    client d'API pour comparer deux chaînes.
+    """
+    depouille = unicodedata.normalize("NFKD", fragment.lower())
+    depouille = "".join(c for c in depouille if not unicodedata.combining(c))
+    return re.sub(r"[^a-z]", "", depouille)
+
+
+def doublons_de_noms() -> dict[str, list[str]]:
+    """EX-IA-44 — les chroniques dont le nom fictif en recoupe une autre.
+
+    Dérivé, jamais stocké : un drapeau en colonne mentirait dès qu'une autre
+    chronique est renommée ou supprimée. Le recoupement porte sur le nom
+    entier **et** sur ses mots composants — « Borin Fendroc » et « Borin
+    Ferconte » seraient indiscernables sur la carte.
+
+    Depuis la v3.15, un doublon n'est plus rejeté à la génération (EX-IA-31) :
+    il est signalé à l'écran de relecture, où l'arbitrage se fait au calme.
+    """
+    par_mot: dict[str, set[str]] = {}
+    with Seance() as seance:
+        lignes = list(seance.execute(
+            select(Chronique.uuid, Chronique.nom_fictif)
+            .where(Chronique.nom_fictif.is_not(None),
+                   Chronique.supprimee.is_(False))))
+    for identifiant, nom in lignes:
+        cles = {_cle_fictif(nom)}
+        cles |= {c for c in map(_cle_fictif, nom.split()) if len(c) >= 4}
+        for cle in cles:
+            par_mot.setdefault(cle, set()).add(identifiant)
+
+    doublons: dict[str, set[str]] = {}
+    for identifiants in par_mot.values():
+        if len(identifiants) > 1:
+            for i in identifiants:
+                doublons.setdefault(i, set()).update(identifiants - {i})
+    return {i: sorted(v) for i, v in doublons.items()}
+
+
 def enregistrer_portrait(identifiant: str, portrait: dict) -> None:
     """Portrait valide reçu : une tentative **et** une génération."""
     with Seance() as seance:
@@ -361,10 +983,16 @@ def enregistrer_portrait(identifiant: str, portrait: dict) -> None:
         chronique.jetons_sortie = portrait.get("jetons_sortie")
         chronique.etat = "prete"
         chronique.derniere_erreur = None
+        # EX-IA-45 — invite envoyée, réponse brute, jetons, durée et
+        # empreinte du questions.yaml en vigueur. Au journal et non en
+        # colonne : une colonne ne garderait que la dernière des trois
+        # générations, alors que c'est l'enchaînement qui doit rester lisible.
         details = {"modele": portrait.get("modele"),
                    "duree_s": portrait.get("duree_s"),
                    "jetons_entree": portrait.get("jetons_entree"),
-                   "jetons_sortie": portrait.get("jetons_sortie")}
+                   "jetons_sortie": portrait.get("jetons_sortie"),
+                   "empreinte_config": portrait.get("empreinte_config"),
+                   **(portrait.get("trace") or {})}
         journaliser(seance, Journal.CHRONIQUE_TENTEE, objet_uuid=identifiant,
                     objet_type="chronique", acteur=chronique.personne_uuid)
         journaliser(seance, Journal.CHRONIQUE_GENEREE, objet_uuid=identifiant,
@@ -373,7 +1001,8 @@ def enregistrer_portrait(identifiant: str, portrait: dict) -> None:
         seance.commit()
 
 
-def enregistrer_echec(identifiant: str, erreur: str) -> None:
+def enregistrer_echec(identifiant: str, erreur: str,
+                      trace: dict | None = None) -> None:
     """Échec : une tentative, aucune génération.
 
     C'est ici que se joue EX-IA-21. Le quota de l'invité suit les portraits
@@ -387,7 +1016,7 @@ def enregistrer_echec(identifiant: str, erreur: str) -> None:
         chronique.derniere_erreur = erreur[:500]
         journaliser(seance, Journal.CHRONIQUE_TENTEE, objet_uuid=identifiant,
                     objet_type="chronique", acteur=chronique.personne_uuid,
-                    details={"erreur": erreur[:300]})
+                    details={"erreur": erreur[:300], **(trace or {})})
         seance.commit()
 
 
@@ -432,7 +1061,7 @@ def reprendre_reponses(identifiant: str, reponses: dict) -> None:
         chronique.etage = etage_des_reponses(fusionnees)
         chronique.validee = False
         chronique.etat = "en_attente"
-        journaliser(seance, "reponses_reprises", objet_uuid=identifiant,
+        journaliser(seance, Journal.REPONSES_REPRISES, objet_uuid=identifiant,
                     objet_type="chronique", acteur=chronique.personne_uuid,
                     details={"cles_modifiees": modifiees})
         seance.commit()
@@ -455,3 +1084,238 @@ def ajouter_bonus(identifiant: str, reponses_bonus: dict) -> None:
         chronique.validee = False
         chronique.etat = "en_attente"
         seance.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Ce que l'administrateur peut écrire (EX-ADM-10)
+# --------------------------------------------------------------------------- #
+
+CHAMPS_MODIFIABLES = ("nom_fictif", "peuple", "portrait", "indice", "lieu")
+
+
+def modifier_chronique(identifiant: str, valeurs: dict,
+                       par: str = "admin") -> dict:
+    """Écrit les champs autorisés et journalise **ce qui a changé**.
+
+    Une ligne « modifiée » sans le détail ne sert à rien en octobre : ce qu'on
+    voudra savoir, c'est si un portrait a été retouché à la main, et depuis
+    quoi. Le journal porte donc l'ancienne et la nouvelle valeur.
+
+    `reponses_json` ne passe PAS par ici : c'est la seule vérité (`EX-GEN-08`),
+    et elle se corrige par l'écran de reprise, qui régénère ensuite. Réécrire
+    un portrait sans toucher aux réponses soigne le symptôme ; corriger la
+    réponse soigne la cause.
+    """
+    changements = {}
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return {}
+        for champ in CHAMPS_MODIFIABLES:
+            if champ not in valeurs:
+                continue
+            nouveau = (valeurs[champ] or "").strip() or None
+            ancien = getattr(chronique, champ)
+            if nouveau == ancien:
+                continue
+            setattr(chronique, champ, nouveau)
+            changements[champ] = {"avant": ancien, "apres": nouveau}
+        if changements:
+            journaliser(seance, Journal.CHRONIQUE_MODIFIEE,
+                        objet_uuid=identifiant, objet_type="chronique",
+                        pour_le_compte_de=par, details=changements)
+            seance.commit()
+    return changements
+
+
+def crediter_chronique(identifiant: str, tout: bool = False,
+                       par: str = "admin") -> int:
+    """Rend une génération, ou les rend toutes. Voir `photos.crediter`.
+
+    `nb_tentatives` n'est jamais rendu : c'est le garde-fou technique contre
+    une chronique qui rappellerait l'API en boucle, pas une courtoisie.
+    """
+    with Seance() as seance:
+        journaliser(
+            seance,
+            Journal.CHRONIQUE_CREDITS_REMIS if tout
+            else Journal.CHRONIQUE_CREDITEE,
+            objet_uuid=identifiant, objet_type="chronique",
+            pour_le_compte_de=par)
+        seance.commit()
+        return compteurs(seance, identifiant)[0]
+
+
+def supprimer_chronique(identifiant: str, supprimee: bool = True,
+                        par: str = "admin") -> bool:
+    """Masque ou remontre une chronique. **Réversible** (`EX-GEN-03`).
+
+    À 21 h, avec un verre, une confirmation ne suffit pas : ce qui sauve, c'est
+    de pouvoir revenir en arrière. Rien n'est effacé, et `reponses_json` — la
+    seule chose qui ne se réécrit pas — reste intacte.
+    """
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None or bool(chronique.supprimee) == supprimee:
+            return False
+        chronique.supprimee = supprimee
+        # `Chronique` ne porte pas de `supprimee_le`, contrairement à `Photo` —
+        # et on n'ajoute pas une migration pour ça à dix jours : l'horodatage
+        # de la suppression vit dans le journal, qui est de toute façon le
+        # seul endroit où l'on saura AUSSI qui l'a faite.
+        journaliser(seance,
+                    Journal.CHRONIQUE_SUPPRIMEE if supprimee
+                    else Journal.CHRONIQUE_RESTAUREE,
+                    objet_uuid=identifiant, objet_type="chronique",
+                    pour_le_compte_de=par)
+        seance.commit()
+        return True
+
+
+def modifier_reponses(identifiant: str, valeurs: dict,
+                      par: str = "admin") -> dict:
+    """Corrige les réponses **sans régénérer**.
+
+    Deux gestes séparés, délibérément : corriger une réponse et relancer le
+    modèle ne se veulent pas toujours ensemble. On corrige, on relit, on
+    régénère si l'on veut — ou l'on retouche le portrait à la main.
+
+    Champ par champ, jamais un JSON brut à recopier : `reponses_json` est la
+    seule vérité (`EX-GEN-08`), une réponse perdue est perdue pour toujours, et
+    une accolade oubliée effacerait tout.
+
+    L'étage se dérive des clés présentes (`EX-QUE-11`) : vider la réponse du
+    second étage y ramène la chronique, et c'est cohérent — il n'y a plus rien
+    du second étage à raconter.
+    """
+    changements = {}
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is None:
+            return {}
+        reponses = json.loads(chronique.reponses_json or "{}")
+        for cle, valeur in valeurs.items():
+            nouveau = (valeur or "").strip()
+            ancien = reponses.get(cle, "")
+            if nouveau == ancien:
+                continue
+            changements[cle] = {"avant": ancien, "apres": nouveau}
+            if nouveau:
+                reponses[cle] = nouveau
+            else:
+                reponses.pop(cle, None)
+        if changements:
+            chronique.reponses_json = json.dumps(reponses, ensure_ascii=False)
+            chronique.etage = etage_des_reponses(reponses)
+            journaliser(seance, Journal.REPONSES_MODIFIEES,
+                        objet_uuid=identifiant, objet_type="chronique",
+                        pour_le_compte_de=par, details=changements)
+            seance.commit()
+    return changements
+
+
+# Ce qui, retouché à la main, remet le portrait en accord avec les réponses.
+# `lieu` n'y est pas : il n'est pas dérivé des réponses, il est assigné.
+CHAMPS_DU_PERSONNAGE = ("nom_fictif", "peuple", "portrait", "indice")
+
+
+def _lignes(seance: Session, identifiant: str, action: str) -> list:
+    return list(seance.scalars(
+        select(Journal).where(Journal.objet_uuid == identifiant,
+                              Journal.action == action)))
+
+
+def _dernier_touchant(lignes: list, champs) -> object | None:
+    """Horodatage de la dernière ligne dont le détail touche l'un des champs.
+
+    Le filtrage se fait en mémoire et non en SQL : les détails sont du JSON,
+    et il y a au plus quelques lignes par chronique. Une requête qui fouille
+    du JSON serait illisible pour épargner trois comparaisons.
+    """
+    dernier = None
+    for ligne in lignes:
+        try:
+            details = json.loads(ligne.details_json or "{}")
+        except ValueError:
+            continue
+        if not any(champ in details for champ in champs):
+            continue
+        if dernier is None or ligne.horodatage > dernier:
+            dernier = ligne.horodatage
+    return dernier
+
+
+def reponses_divergentes(identifiant: str) -> bool:
+    """Le portrait reflète-t-il encore les réponses ?
+
+    **Dérivé, jamais stocké** : trois dates du journal comparées. Un drapeau en
+    colonne se désynchroniserait le jour où l'on régénère sans passer par
+    l'écran — et c'est justement le jour où l'on s'y fierait.
+
+    Trois règles, chacune pour une raison distincte :
+
+    1. Seule compte la modification d'une réponse **qui alimente le modèle**.
+       Changer « que souhaites-tu aux mariés » ne périme rien : cette réponse
+       est montrée telle quelle aux mariés et n'atteint jamais le portrait
+       (`CLES_HORS_PORTRAIT`, dérivé de `questions.yaml`).
+    2. Régénérer remet en accord.
+    3. **Retoucher le personnage à la main aussi.** Corriger le texte, le nom
+       ou le peuple, c'est mettre le portrait en accord soi-même — le drapeau
+       n'a plus rien à signaler. Modifier le seul `lieu` ne compte pas : il ne
+       vient pas des réponses.
+    """
+    with Seance() as seance:
+        modifiees = _dernier_touchant(
+            _lignes(seance, identifiant, Journal.REPONSES_MODIFIEES),
+            [c for c in _toutes_les_cles(seance, identifiant)
+             if c not in CLES_HORS_PORTRAIT])
+        if modifiees is None:
+            return False
+        engendre = seance.scalar(
+            select(func.max(Journal.horodatage)).where(
+                Journal.objet_uuid == identifiant,
+                Journal.action == Journal.CHRONIQUE_GENEREE))
+        retouche = _dernier_touchant(
+            _lignes(seance, identifiant, Journal.CHRONIQUE_MODIFIEE),
+            CHAMPS_DU_PERSONNAGE)
+        alignement = max([d for d in (engendre, retouche) if d is not None],
+                         default=None)
+        # Jamais engendré ni retouché : il n'y a pas de portrait à périmer.
+        return alignement is not None and modifiees > alignement
+
+
+def _toutes_les_cles(seance: Session, identifiant: str) -> set[str]:
+    """Les clés connues : celles des réponses, plus celles déjà retirées.
+
+    Une clé effacée doit compter comme un changement — vider « métier » périme
+    le portrait autant que le réécrire.
+    """
+    connues = set(CLES_HORS_PORTRAIT)
+    chronique = seance.get(Chronique, identifiant)
+    if chronique is not None:
+        connues |= set(json.loads(chronique.reponses_json or "{}"))
+    for ligne in _lignes(seance, identifiant, Journal.REPONSES_MODIFIEES):
+        try:
+            connues |= set(json.loads(ligne.details_json or "{}"))
+        except ValueError:
+            pass
+    return connues
+
+
+def marquer_en_attente(identifiant: str) -> None:
+    """Dit que le Conseil va écrire, à l'instant même où la tâche est en file.
+
+    Sans cela, l'état reste `prete` entre la mise en file et le moment où un
+    fil se saisit de la tâche : l'écran continue de montrer l'ancien portrait
+    sans un mot. Le parcours invité gagnait cette course par la vitesse du
+    worker et non par construction — huit fils libres réclament en quelques
+    millisecondes. La route d'administration, elle, la perdait toujours.
+
+    N'écrase jamais `en_cours` : une tâche déjà saisie ne revient pas en
+    arrière.
+    """
+    with Seance() as seance:
+        chronique = seance.get(Chronique, identifiant)
+        if chronique is not None and chronique.etat != "en_cours":
+            chronique.etat = "en_attente"
+            seance.commit()

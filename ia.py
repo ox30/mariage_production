@@ -12,12 +12,88 @@ import unicodedata
 
 import httpx
 
+import debit
+
 URL_API = "https://api.anthropic.com/v1/messages"
 MODELE_DEFAUT = "claude-sonnet-5"
+# Borne, jamais facturée (EX-IA-34). Le modèle et ce plafond sont des
+# PARAMÈTRES REÇUS, lus par l'appelant dans le bloc `ia:` du config.yaml du
+# projet (section 4.6, EX-ADM-02). Ils ne sont plus lus dans
+# l'environnement : deux sources pour une valeur, c'est le défaut du
+# 25 août. Les valeurs ci-dessous ne servent qu'au repli de développement,
+# qui n'a pas de config.yaml.
+JETONS_MAX_DEFAUT = 8000
 
 
 class ErreurGeneration(Exception):
-    pass
+    """Échec d'une tentative de génération.
+
+    Porte la **nature** de l'échec, pour que le worker décide seul s'il faut
+    réessayer et quand (EX-ARC-13). Le client d'API ne boucle pas : trois
+    niveaux de reprise composés produiraient jusqu'à trente appels facturés là
+    où trois sont prévus.
+    """
+
+    temporaire = False
+    categorie = "definitive"
+
+    def __init__(self, message: str, *, reprendre_apres_s: float | None = None,
+                 trace: dict | None = None):
+        super().__init__(message)
+        # Délai lu dans l'en-tête `retry-after`, que le worker posera dans
+        # `tache.reprendre_apres`. Une attente en puissances de deux l'ignore
+        # par construction (EX-IA-19).
+        self.reprendre_apres_s = reprendre_apres_s
+        # EX-IA-45 — ce qui a été envoyé et reçu, même en cas d'échec.
+        self.trace = trace or {}
+
+
+class ErreurTemporaire(ErreurGeneration):
+    """À réessayer : rien n'indique que la même demande échouera toujours."""
+
+    temporaire = True
+    categorie = "temporaire"
+
+
+class ErreurDebit(ErreurTemporaire):
+    """429 — limitation de débit, **propre au compte** (EX-IA-22).
+
+    Seule celle-ci justifie d'espacer les validations ou de monter de palier.
+    """
+
+    categorie = "debit"
+
+
+class ErreurSaturation(ErreurTemporaire):
+    """529 — surcharge du fournisseur, indépendante du palier (EX-IA-22)."""
+
+    categorie = "saturation"
+
+
+class ErreurReseau(ErreurTemporaire):
+    """Délai dépassé, connexion coupée, réponse illisible au niveau transport."""
+
+    categorie = "reseau"
+
+
+class ErreurReponse(ErreurTemporaire):
+    """La réponse est arrivée mais ne convient pas.
+
+    JSON illisible, champ manquant, peuple hors liste, texte tronqué au
+    plafond. Réessayable : le modèle varie d'un appel à l'autre.
+    """
+
+    categorie = "reponse"
+
+
+class ErreurDefinitive(ErreurGeneration):
+    """Réessayer ne servirait à rien : clé absente ou refusée, requête invalide.
+
+    Le worker passe directement l'objet en `echouee` sans consommer ses trois
+    tentatives sur un mur.
+    """
+
+    categorie = "definitive"
 
 
 def _normaliser(mot: str) -> str:
@@ -194,26 +270,60 @@ def _construire_message(config: dict, participation: dict) -> str:
     return "\n".join(lignes)
 
 
-def generer(config: dict, participation: dict) -> dict:
-    """Appelle le modèle et renvoie le portrait validé.
+def _delai_retry_after(reponse) -> float | None:
+    """Lit l'en-tête `retry-after`, en secondes ou en date HTTP.
 
-    Trois tentatives, attente croissante — même politique que la file de
-    tâches de l'application réelle (EX-ARC-13).
+    C'est la seule information qui dise **quand** réessayer sans aggraver la
+    limitation. Une attente en puissances de deux l'ignore par construction
+    (EX-IA-19, EX-ARC-13).
+    """
+    brut = reponse.headers.get("retry-after")
+    if not brut:
+        return None
+    try:
+        return max(0.0, float(brut.strip()))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        cible = parsedate_to_datetime(brut)
+        if cible.tzinfo is None:
+            cible = cible.replace(tzinfo=timezone.utc)
+        return max(0.0, (cible - datetime.now(timezone.utc)).total_seconds())
+    except Exception:
+        return None
+
+
+def generer(config: dict, participation: dict) -> dict:
+    """Appelle le modèle **une fois** et renvoie le portrait validé.
+
+    **Une tentative, jamais plus** (EX-ARC-13, précisé v3.13). Le réessai
+    appartient au worker et à lui seul : une boucle interne composée avec
+    celle de la file produirait jusqu'à trente appels facturés là où trois
+    sont prévus, et ne saurait pas honorer l'en-tête `retry-after` d'un 429.
+
+    Lève une sous-classe d'`ErreurGeneration` portant la nature de l'échec —
+    `ErreurDebit`, `ErreurSaturation`, `ErreurReseau`, `ErreurReponse`,
+    `ErreurDefinitive` — le délai éventuel, et la trace de ce qui a été
+    envoyé et reçu (EX-IA-45). Le worker décide.
     """
     cle = os.environ.get("ANTHROPIC_API_KEY")
     if not cle:
-        raise ErreurGeneration("ANTHROPIC_API_KEY absente de l'environnement")
+        raise ErreurDefinitive("ANTHROPIC_API_KEY absente de l'environnement")
 
-    modele = os.environ.get("MODELE_IA", MODELE_DEFAUT)
+    modele = participation.get("modele") or MODELE_DEFAUT
+    invite = _construire_message(config, participation)
     corps = {
         "model": modele,
-        # Le compteur de sortie dépasse largement le texte visible : 1786 jetons
-        # pour 144 mots ont été mesurés. La troncature ne vient donc pas de la
-        # longueur du portrait et ne se corrige pas en le raccourcissant. Le
-        # plafond borne sans facturer : le mettre large ne coûte rien.
-        "max_tokens": 8000,
+        # Le compteur de sortie dépasse largement le texte visible : 4 836
+        # jetons pour 217 mots ont été mesurés en production. La troncature ne
+        # vient donc pas de la longueur du portrait et ne se corrige pas en le
+        # raccourcissant. Le plafond borne sans facturer : le mettre large ne
+        # coûte rien.
+        "max_tokens": participation.get("jetons_max") or JETONS_MAX_DEFAUT,
         "system": config["contrat"],
-        "messages": [{"role": "user", "content": _construire_message(config, participation)}],
+        "messages": [{"role": "user", "content": invite}],
     }
     entetes = {
         "x-api-key": cle,
@@ -221,69 +331,100 @@ def generer(config: dict, participation: dict) -> dict:
         "content-type": "application/json",
     }
 
-    derniere_erreur = ""
-    for tentative in range(3):
-        if tentative:
-            time.sleep(2 ** tentative)
-        try:
-            debut = time.monotonic()
-            reponse = httpx.post(URL_API, json=corps, headers=entetes, timeout=60.0)
-            duree = time.monotonic() - debut
-            if reponse.status_code != 200:
-                derniere_erreur = f"HTTP {reponse.status_code} — {reponse.text[:300]}"
-                continue
-            charge = reponse.json()
-        except Exception as exc:  # réseau, timeout, JSON illisible
-            derniere_erreur = f"{type(exc).__name__} — {exc}"
-            continue
+    # EX-IA-45 — ce qui a été envoyé et reçu, consigné même en cas d'échec.
+    # Le contrat système n'y figure pas : il vient de `questions.yaml`, dont
+    # l'empreinte est jointe par l'appelant. Le recopier cent trente fois
+    # n'apprendrait rien de plus.
+    trace = {"invite": invite, "modele": modele}
 
-        brut = "".join(
-            bloc.get("text", "") for bloc in charge.get("content", []) if bloc.get("type") == "text"
-        ).strip()
-        brut = re.sub(r"^```(?:json)?|```$", "", brut, flags=re.MULTILINE).strip()
+    debut = time.monotonic()
+    try:
+        reponse = httpx.post(URL_API, json=corps, headers=entetes, timeout=60.0)
+    except Exception as exc:  # réseau, délai dépassé
+        trace["duree_s"] = round(time.monotonic() - debut, 1)
+        raise ErreurReseau(f"{type(exc).__name__} — {exc}", trace=trace) from exc
 
-        # Une réponse coupée au plafond n'est pas un JSON invalide : c'est un
-        # portrait trop long. Le dire pour ne pas chercher au mauvais endroit.
-        if charge.get("stop_reason") == "max_tokens":
-            derniere_erreur = (
-                "réponse tronquée au plafond de jetons — le modèle a dépassé "
-                "les 150 mots demandés"
-            )
-            continue
+    duree = time.monotonic() - debut
+    trace["duree_s"] = round(duree, 1)
+    trace["code_http"] = reponse.status_code
 
-        try:
-            portrait = json.loads(brut)
-        except json.JSONDecodeError:
-            derniere_erreur = f"JSON illisible : {brut[:300]}"
-            continue
+    # Le palier de débit se relève ICI, avant tout aiguillage sur le code HTTP :
+    # les en-têtes sont présents sur une réponse 429 comme sur un succès, et
+    # c'est justement quand ça sature qu'on veut le chiffre. Le relevé ne
+    # régule rien — il rend visible ce qu'on lisait jusque-là sur la console,
+    # une fois, hors de l'application.
+    releve = debit.noter(reponse.headers)
+    if releve:
+        trace["debit"] = releve
 
-        manquants = [c for c in ("nom_fictif", "peuple", "portrait", "indice") if not portrait.get(c)]
-        if manquants:
-            derniere_erreur = f"champs manquants : {', '.join(manquants)}"
-            continue
+    if reponse.status_code != 200:
+        detail = f"HTTP {reponse.status_code} — {reponse.text[:300]}"
+        trace["reponse_brute"] = reponse.text[:2000]
+        # EX-IA-22 — 429 et 529 se réessaient tous deux, mais seul le premier
+        # est propre au compte et justifie d'espacer les validations.
+        if reponse.status_code == 429:
+            raise ErreurDebit(detail, reprendre_apres_s=_delai_retry_after(reponse),
+                              trace=trace)
+        if reponse.status_code == 529:
+            raise ErreurSaturation(detail, reprendre_apres_s=_delai_retry_after(reponse),
+                                   trace=trace)
+        if reponse.status_code in (408, 500, 502, 503, 504):
+            raise ErreurReseau(detail, trace=trace)
+        # 400, 401, 403 : la même demande échouera identiquement.
+        raise ErreurDefinitive(detail, trace=trace)
 
-        pris = {_normaliser(n) for n in (participation.get("noms_fictifs_pris") or [])}
-        mots_pris = {m for n in (participation.get("noms_fictifs_pris") or [])
-                     for m in map(_normaliser, n.split()) if len(m) >= 4}
-        propose = _normaliser(portrait["nom_fictif"])
-        mots_proposes = {m for m in map(_normaliser, portrait["nom_fictif"].split()) if len(m) >= 4}
-        if propose in pris or (mots_proposes & mots_pris):
-            derniere_erreur = f"nom fictif déjà attribué : {portrait['nom_fictif']}"
-            continue
+    try:
+        charge = reponse.json()
+    except Exception as exc:
+        trace["reponse_brute"] = reponse.text[:2000]
+        raise ErreurReseau(f"réponse illisible : {exc}", trace=trace) from exc
 
-        peuple = _normaliser(portrait["peuple"])
-        if peuple not in {_normaliser(p) for p in config["peuples"]}:
-            derniere_erreur = f"peuple hors liste : {portrait['peuple']}"
-            continue
+    usage = charge.get("usage", {})
+    trace["jetons_entree"] = usage.get("input_tokens")
+    trace["jetons_sortie"] = usage.get("output_tokens")
 
-        usage = charge.get("usage", {})
-        portrait["modele"] = modele
-        portrait["duree_s"] = round(duree, 1)
-        portrait["jetons_entree"] = usage.get("input_tokens")
-        portrait["jetons_sortie"] = usage.get("output_tokens")
-        portrait["fuites_noms"] = verifier_noms(
-            portrait["portrait"] + " " + portrait["indice"], participation["noms_interdits"]
-        )
-        return portrait
+    brut = "".join(
+        bloc.get("text", "") for bloc in charge.get("content", []) if bloc.get("type") == "text"
+    ).strip()
+    brut = re.sub(r"^```(?:json)?|```$", "", brut, flags=re.MULTILINE).strip()
+    trace["reponse_brute"] = brut[:4000]
 
-    raise ErreurGeneration(derniere_erreur or "échec inconnu")
+    # Une réponse coupée au plafond n'est pas un JSON invalide : c'est un
+    # portrait trop long. Le dire pour ne pas chercher au mauvais endroit.
+    if charge.get("stop_reason") == "max_tokens":
+        raise ErreurReponse(
+            "réponse tronquée au plafond de jetons — le modèle a dépassé "
+            "les 150 mots demandés", trace=trace)
+
+    try:
+        portrait = json.loads(brut)
+    except json.JSONDecodeError:
+        raise ErreurReponse(f"JSON illisible : {brut[:300]}", trace=trace) from None
+
+    manquants = [c for c in ("nom_fictif", "peuple", "portrait", "indice") if not portrait.get(c)]
+    if manquants:
+        raise ErreurReponse(f"champs manquants : {', '.join(manquants)}", trace=trace)
+
+    peuple = _normaliser(portrait["peuple"])
+    if peuple not in {_normaliser(p) for p in config["peuples"]}:
+        raise ErreurReponse(f"peuple hors liste : {portrait['peuple']}", trace=trace)
+
+    # EX-IA-31, modifié v3.15 — un nom fictif en double n'est plus REJETÉ.
+    # La règle du rejet, validée sur huit chroniques, portait sur tout mot de
+    # quatre lettres partagé : à cent chroniques ce sont deux cents mots
+    # interdits dans un espace onomastique restreint, et chaque rejet gaspille
+    # un appel déjà payé en occupant un fil trente secondes — précisément
+    # quand la file est la plus chargée. La liste reste transmise au modèle
+    # comme suggestion ; le doublon est détecté côté serveur et signalé à
+    # l'écran de relecture (EX-IA-44), comme le fait déjà EX-IA-13 pour les
+    # noms réels : « il signale, il ne corrige pas ».
+
+    portrait["modele"] = modele
+    portrait["duree_s"] = round(duree, 1)
+    portrait["jetons_entree"] = usage.get("input_tokens")
+    portrait["jetons_sortie"] = usage.get("output_tokens")
+    portrait["fuites_noms"] = verifier_noms(
+        portrait["portrait"] + " " + portrait["indice"], participation["noms_interdits"]
+    )
+    portrait["trace"] = trace
+    return portrait

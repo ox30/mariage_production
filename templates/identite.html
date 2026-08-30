@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Le Livre des Convoqués</p>
+  <h1>{% if intention == "revoir" %}Retrouver son personnage{% else %}Qui êtes-vous&nbsp;?{% endif %}</h1>
+  <p class="discret">Touchez votre nom. Il ne sera jamais écrit dans le texte&nbsp;;
+     il ne servira qu'aux mariés, plus tard, pour vous reconnaître.</p>
+
+  {% if erreur %}<p class="erreur">{{ erreur }}</p>{% endif %}
+
+  {# Toute la liste part dans la page et le filtre se fait ici, sans requête :
+     93 noms font deux kilo-octets, et le filtre marche encore si la 4G de la
+     salle flanche. Une recherche côté serveur ferait un aller-retour par
+     frappe. EX-AUTH-16 — cette liste ne sert qu'à trouver sa propre identité. #}
+  <p><input type="text" id="filtre" placeholder="Chercher un nom…"
+            autocomplete="off" autocapitalize="none" autocorrect="off"
+            spellcheck="false"></p>
+  <p class="discret" id="aucun-resultat" hidden>Aucun nom ne correspond.
+     Vérifiez l'orthographe, ou dites que vous n'êtes pas dans la liste.</p>
+
+  <form method="post" action="/identite/choisir" id="annuaire">
+    <input type="hidden" name="intention" value="{{ intention }}">
+    {% for groupe in annuaire %}
+      <div class="groupe-table" data-table="{{ groupe.nom }}">
+        <p class="surtitre">{{ groupe.nom }}</p>
+        {% for p in groupe.gens %}
+          <button type="submit" name="personne_uuid" value="{{ p.uuid }}"
+                  class="choix personne"
+                  data-cherche="{{ (p.prenom ~ ' ' ~ p.nom ~ ' ' ~ groupe.nom) | trim }}">
+            {{ p.prenom }} {{ p.nom }}
+            {% if p.a_une_chronique %}
+              <span class="discret" style="font-size:0.85em">— a déjà un personnage</span>
+            {% endif %}
+          </button>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </form>
+
+  <p style="margin-top:1.5rem">
+    <a class="action sobre" href="/identite/libre?intention={{ intention }}">
+      Je ne suis pas dans la liste
+    </a>
+  </p>
+  <p class="discret" style="text-align:center"><a href="/">← Revenir</a></p>
+</div>
+
+<script>
+(function () {
+  var champ = document.getElementById("filtre");
+  var aucun = document.getElementById("aucun-resultat");
+  if (!champ) return;
+
+  // Accents retirés des DEUX côtés : « Hélène » se tape « helene » à 22 h,
+  // et « Schäer » ne se tape pas du tout.
+  function nu(t) {
+    return t.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase().replace(/[-']/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  champ.addEventListener("input", function () {
+    var q = nu(champ.value), visibles = 0;
+    document.querySelectorAll(".groupe-table").forEach(function (groupe) {
+      var restants = 0;
+      groupe.querySelectorAll(".personne").forEach(function (b) {
+        var vu = !q || nu(b.dataset.cherche).indexOf(q) !== -1;
+        b.hidden = !vu;
+        if (vu) { restants++; visibles++; }
+      });
+      // Le titre de table disparaît avec ses membres : un intertitre seul
+      // laisse croire que la table est vide, pas qu'elle est filtrée.
+      groupe.hidden = restants === 0;
+    });
+    aucun.hidden = visibles !== 0;
+  });
+})();
+</script>
+{% endblock %}

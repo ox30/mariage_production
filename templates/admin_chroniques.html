@@ -1,0 +1,46 @@
+{% extends "admin_base.html" %}
+{% block panneau %}
+<h1>Les chroniques{% if sur_le_test %} de test{% endif %}</h1>
+
+{# EX-TST-05 — production par défaut, test sur demande explicite. Le tableau
+   était devenu aveugle au test le jour où `lister()` a cessé de l'inclure, et
+   c'était l'endroit même où l'on vérifie le test de fumée du jour J. #}
+<p class="discret">
+  {% if sur_le_test %}
+    <a href="/admin/chroniques">Revenir à la production</a>
+  {% else %}
+    <a href="/admin/chroniques?test=oui">Voir les chroniques de test</a>
+  {% endif %}
+</p>
+
+{% if not lignes %}
+  <p class="discret">Aucune chronique{% if sur_le_test %} de test{% endif %}.</p>
+{% else %}
+<table class="grille">
+  <thead><tr>
+    <th>Invité</th><th>Personnage</th><th>Lieu</th>
+    <th>État</th><th>Photo</th>
+  </tr></thead>
+  <tbody>
+  {% for p in lignes %}
+    <tr>
+      <td><a href="/admin/chronique/{{ p.uuid }}">{{ p.prenom }} {{ p.nom }}</a>
+        {% if p.est_marie %}<br><span class="vigilance">marié·e — hors jeu</span>{% endif %}</td>
+      <td>{{ p.nom_fictif or "—" }}</td>
+      <td>{{ p.lieu_affiche }}</td>
+      <td>{{ p.etat }}</td>
+      {# L'état de la photo est ce qu'on vient vérifier ici : « aucune » se
+         distingue de « en traitement », qui se distingue d'un échec. Sans
+         cette colonne, il fallait ouvrir les quatre-vingt-treize fiches. #}
+      <td>
+        {% if p.photo is none %}<span class="discret">aucune</span>
+        {% elif p.photo.etat == "prete" %}prête
+        {% elif p.photo.etat == "echouee" %}<span class="alerte">échouée</span>
+        {% else %}<span class="vigilance">en traitement</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

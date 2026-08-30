@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import os
+import time
 import pathlib
 import zoneinfo
 from dataclasses import dataclass
@@ -129,6 +130,9 @@ class Projet:
     est_developpement: bool
     volume_monte: bool
     configuration: dict
+    # Ce que `config.yaml` prétend, quand il le prétend. Sert uniquement à
+    # signaler un désaccord avec le nom du dossier ; ne commande rien.
+    identifiant_declare: str | None = None
 
     @property
     def est_production(self) -> bool:
@@ -215,6 +219,18 @@ def _lire_pointeur(racine: pathlib.Path) -> str | None:
     return None
 
 
+def _avertissements_projet(p: "Projet") -> list[str]:
+    """Désaccords qui n'empêchent pas de servir, mais qu'il faut voir."""
+    avertissements = _avertissements_nom(p.identifiant)
+    if p.identifiant_declare and p.identifiant_declare != p.identifiant:
+        avertissements.append(
+            f"config.yaml déclare « {p.identifiant_declare} » alors que le "
+            f"dossier s'appelle « {p.identifiant} ». Le dossier fait autorité "
+            f"— les sauvegardes partent sous le préfixe « {p.identifiant} ». "
+            f"Corriger ou retirer le champ `projet.identifiant`.")
+    return avertissements
+
+
 def _avertissements_nom(identifiant: str) -> list[str]:
     """EX-PRJ-02 demande `AAAA-MM-JJ-identifiant`.
 
@@ -230,8 +246,43 @@ def _avertissements_nom(identifiant: str) -> list[str]:
             f"AAAA-MM-JJ-identifiant attendue par EX-PRJ-02"]
 
 
+class _LecteurStrict(yaml.SafeLoader):
+    """YAML qui refuse deux fois la même clé au même niveau.
+
+    PyYAML garde silencieusement la **dernière** occurrence. Ajouter un bloc
+    `acces:` en tête d'un fichier qui en portait déjà un plus bas produit donc
+    exactement l'inverse de ce qu'on croit avoir écrit — et rien ne le dit.
+    C'est le mode de défaillance de tout ce projet : deux endroits qui
+    déclarent la même chose sans obligation de s'accorder.
+    """
+
+
+def _sans_doublon(lecteur, noeud, deep=False):
+    vues, paire = {}, {}
+    for cle_noeud, valeur_noeud in noeud.value:
+        cle = lecteur.construct_object(cle_noeud, deep=deep)
+        if cle in vues:
+            raise ErreurConfiguration(
+                f"la clé « {cle} » apparaît DEUX FOIS au même niveau, "
+                f"lignes {vues[cle]} et {cle_noeud.start_mark.line + 1}. "
+                "YAML garde silencieusement la dernière, ce qui donne "
+                "l'inverse de ce qu'on croit avoir écrit. Fusionner les deux "
+                "blocs en un seul.")
+        vues[cle] = cle_noeud.start_mark.line + 1
+        paire[cle] = lecteur.construct_object(valeur_noeud, deep=deep)
+    return paire
+
+
+_LecteurStrict.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _sans_doublon)
+
+
 def _charger_configuration(chemin: pathlib.Path) -> dict:
-    brut = yaml.safe_load(chemin.read_text(encoding="utf-8")) or {}
+    # `utf-8-sig` est une ceinture : mesuré, PyYAML absorbe déjà lui-même la
+    # marque d'ordre d'octets qu'un enregistrement depuis Windows peut poser.
+    # Aucun test ne le prouve, et c'est dit ici plutôt que d'écrire un contrôle
+    # incapable d'échouer.
+    brut = yaml.load(chemin.read_text(encoding="utf-8-sig"), _LecteurStrict) or {}
     if not isinstance(brut, dict):
         raise ErreurConfiguration(f"{chemin} ne contient pas un dictionnaire YAML")
     return brut
@@ -297,7 +348,14 @@ def _projet_du_volume(racine: pathlib.Path, identifiant: str) -> Projet:
         )
 
     return Projet(
-        identifiant=str(bloc.get("identifiant") or identifiant),
+        # Le NOM DU DOSSIER fait autorité, jamais le champ déclaratif.
+        # Défaut du 25 août : `config.yaml` recopié depuis `exemples/`
+        # portait un autre identifiant, et les sauvegardes sont parties sous un
+        # préfixe qui ne correspondait à aucun dossier. Deux endroits
+        # déclaraient l'identité d'un projet, rien ne les obligeait à
+        # s'accorder, et personne n'a rien vu. Le dossier dit où vivent
+        # réellement les données : c'est lui la vérité.
+        identifiant=identifiant,
         nom=str(bloc.get("nom") or identifiant),
         date=str(bloc["date"]) if bloc.get("date") else None,
         type=type_projet,
@@ -310,6 +368,8 @@ def _projet_du_volume(racine: pathlib.Path, identifiant: str) -> Projet:
         dossier_exports=dossier / "exports",
         dossier_logs=dossier / "logs",
         dossier_instantanes=dossier / "instantanes",
+        identifiant_declare=(str(bloc["identifiant"]).strip()
+                             if bloc.get("identifiant") else None),
         est_developpement=False,
         volume_monte=True,
         configuration=configuration,
@@ -342,6 +402,7 @@ def _projet_de_developpement(racine: pathlib.Path) -> Projet:
         dossier_instantanes=dossier / "instantanes",
         est_developpement=True,
         volume_monte=racine != RACINE_DEVELOPPEMENT,
+        identifiant_declare=None,
         configuration={},
     )
 
@@ -386,11 +447,107 @@ def oublier() -> None:
     """Vide les caches. Réservé aux tests, qui changent d'environnement."""
     projet.cache_clear()
     zone_affichage.cache_clear()
+    _cache_parametres.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Paramètres relus à chaud
+# --------------------------------------------------------------------------- #
+
+# `config.yaml` vit sur le volume : il s'édite depuis la console, sans
+# redéployer. C'est ce qui rend le nombre de fils du worker réglable pendant
+# la soirée (EX-ARC-20), alors qu'EX-SAU-09 gèle les déploiements.
+_cache_parametres: dict[str, tuple[float, dict]] = {}
+DELAI_RELECTURE_S = 10.0
+
+
+def parametre(chemin: str, defaut=None):
+    """Valeur de `config.yaml`, désignée par un chemin pointé.
+
+    Relue au plus toutes les dix secondes : assez souvent pour qu'un réglage
+    fait en pleine soirée prenne effet sans qu'on attende, assez rarement pour
+    ne pas lire un fichier à chaque tâche.
+
+    Le projet de développement n'a pas de `config.yaml` — la valeur par défaut
+    s'applique alors, sans erreur.
+    """
+    p = projet()
+    if p.chemin_configuration is None or not p.chemin_configuration.is_file():
+        return defaut
+
+    horodatage, contenu = _cache_parametres.get("courant", (0.0, {}))
+    if time.monotonic() - horodatage > DELAI_RELECTURE_S:
+        try:
+            contenu = _charger_configuration(p.chemin_configuration)
+        except (OSError, yaml.YAMLError):
+            # Un fichier momentanément illisible — sauvegarde en cours d'écriture
+            # — ne doit pas faire tomber le worker : on garde la dernière
+            # valeur connue.
+            contenu = _cache_parametres.get("courant", (0.0, {}))[1]
+        _cache_parametres["courant"] = (time.monotonic(), contenu)
+
+    valeur = contenu
+    for morceau in chemin.split("."):
+        if not isinstance(valeur, dict) or morceau not in valeur:
+            return defaut
+        valeur = valeur[morceau]
+    return valeur
 
 
 # --------------------------------------------------------------------------- #
 # Résumé de démarrage
 # --------------------------------------------------------------------------- #
+
+def bloc_erreur(exc: Exception) -> str:
+    """Une erreur de configuration écrite comme une consigne, pas comme un bug.
+
+    Constaté le 25 août sur Railway : le message qui dit quoi faire sortait
+    sous douze lignes de trace Python, répétées onze fois par le redémarrage
+    en boucle. La trace n'apprend rien — ce n'est pas un défaut du programme,
+    c'est un fichier à corriger — et elle enterre la seule ligne utile.
+
+    Même raison d'être que le résumé de démarrage : une ligne lisible contre
+    plusieurs minutes de défilement, au moment précis où le service est à
+    terre et où l'on cherche vite.
+    """
+    largeur = 78
+    # La ligne compacte AVANT le cadre. Railway attribue un horodatage à
+    # chaque ligne et les retrie : le cadre du 25 août est arrivé en morceaux,
+    # son corps affiché avant son en-tête. Cette ligne-ci est atomique, donc
+    # toujours lisible quel que soit le réordonnancement ; le cadre reste pour
+    # le confort de lecture en local.
+    lignes = ["", "CONFIGURATION REFUSÉE — " + " ".join(str(exc).split())]
+    lignes += [
+        "",
+        "┌" + "─" * largeur + "┐",
+        "│ CONFIGURATION REFUSÉE — le service démarre, mais ne sert rien".ljust(largeur + 1) + "│",
+        "├" + "─" * largeur + "┤",
+    ]
+    for paragraphe in str(exc).split("\n"):
+        mots, courante = paragraphe.split(" "), ""
+        if not paragraphe.strip():
+            lignes.append("│" + " " * largeur + "│")
+            continue
+        for mot in mots:
+            # Un mot plus long que le cadre — un chemin, une URL — est coupé
+            # plutôt que laissé déborder : une bordure qui se décale au milieu
+            # du message donne l'impression d'un affichage cassé, et c'est
+            # précisément le moment où l'on veut être rassuré sur ce qu'on lit.
+            while len(mot) > largeur - 2:
+                if courante:
+                    lignes.append("│ " + courante.ljust(largeur - 1) + "│")
+                    courante = ""
+                lignes.append("│ " + mot[:largeur - 2].ljust(largeur - 1) + "│")
+                mot = mot[largeur - 2:]
+            if len(courante) + len(mot) + 1 > largeur - 2:
+                lignes.append("│ " + courante.ljust(largeur - 1) + "│")
+                courante = mot
+            else:
+                courante = f"{courante} {mot}".strip()
+        lignes.append("│ " + courante.ljust(largeur - 1) + "│")
+    lignes += ["└" + "─" * largeur + "┘", ""]
+    return "\n".join(lignes)
+
 
 def resume_demarrage() -> str:
     """Les quelques lignes à écrire au journal au `lifespan`.
@@ -409,6 +566,15 @@ def resume_demarrage() -> str:
         f"dossier         : {p.dossier}",
         f"base            : {p.chemin_base}",
         f"questions.yaml  : {p.chemin_questions}  [{empreinte(p.chemin_questions)}]",
+        # L'empreinte de config.yaml manquait, alors que celle de
+        # questions.yaml était là depuis l'étape 1. Le 25 août, une valeur
+        # qu'on croyait modifiée sur le volume ne l'était pas, et rien ne
+        # permettait de le voir : l'empreinte le dit en un coup d'œil, sans
+        # avoir à ouvrir le fichier.
+        (f"config.yaml     : {p.chemin_configuration}  "
+         f"[{empreinte(p.chemin_configuration)}]"
+         if p.chemin_configuration and p.chemin_configuration.is_file()
+         else "config.yaml     : aucun (repli de développement)"),
         f"fuseau affiché  : {nom_zone_affichage()}"
         f"  ({en_heure_locale(maintenant()):%Y-%m-%d %H:%M})",
     ]
@@ -435,7 +601,7 @@ def resume_demarrage() -> str:
             "questions.yaml est lu dans le dépôt au lieu du volume. Déposer "
             f"{POINTEUR} puis poser EXIGER_VOLUME=1 (EX-PRJ-01, EX-PRJ-12)."
         )
-    for avertissement in (_avertissements_nom(p.identifiant)
+    for avertissement in (_avertissements_projet(p)
                           if not p.est_developpement else []):
         lignes.append(f"avertissement   : {avertissement}")
     return "\n".join(lignes)

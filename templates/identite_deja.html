@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Le Livre des Convoqués</p>
+  <h1>Vous avez déjà un personnage</h1>
+
+  {# La reconduction était muette : on ressaisissait son nom pour créer, et on
+     se retrouvait devant un portrait sans savoir pourquoi. EX-AUTH-09 veut
+     que l'écran le dise. Rien n'est écrasé — les réponses sont la seule chose
+     irremplaçable du projet (EX-GEN-08). #}
+  <p>{{ prenom }}, le Conseil a déjà écrit votre chronique. Il n'en écrit
+     qu'une par personne&nbsp;: vos réponses sont conservées, et vous pouvez
+     encore les reprendre ou demander une réécriture.</p>
+
+  <a class="action" href="/portrait/{{ chronique_uuid }}">Voir mon personnage</a>
+  <p class="discret" style="margin-top:1rem;text-align:center">
+    <a href="/identite?intention=creer">Ce n'était pas vous&nbsp;? Ressaisir un nom</a>
+  </p>
+</div>
+{% endblock %}

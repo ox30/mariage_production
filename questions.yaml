@@ -122,6 +122,14 @@ obligatoires:
       - Têtu comme une mule
       - Je veux tout contrôler
       - Je remets tout à demain
+      # +2 le 25 août (EX-QUE-17) : à six options et cent invités,
+      # dix-sept personnes partagent le même défaut.
+      - Je m'inquiète pour tout
+      - Je dis ce que je pense, trop vite
+    autre:
+      libelle: Autre chose…
+      exemple: en quelques mots, à la première personne
+      limite: 60
 
   - cle: objet
     role: ancre forte (artefact)
@@ -131,6 +139,12 @@ obligatoires:
     limite: 60
 
   - cle: allegeance
+    # Ce que le questionnaire réduit des mariés fait de cette question
+    # (EX-MAR-02, EX-MAR-03). Marqué ICI et non dans le code :
+    # `questions.yaml` est la référence éditoriale (EX-QUE-12), elle se
+    # corrige sans redéploiement, et une question ajoutée demain se marque
+    # là où elle s'écrit.
+    sur_les_maries: La Lumière
     role: registre du portrait
     type: boutons
     question: Ce soir, tu sers la Lumière ou l'Ombre ?
@@ -164,6 +178,12 @@ obligatoires:
       - Non, je compte bien survivre
 
   - cle: souvenir
+    # Ce que le questionnaire réduit des mariés fait de cette question
+    # (EX-MAR-02, EX-MAR-03). Marqué ICI et non dans le code :
+    # `questions.yaml` est la référence éditoriale (EX-QUE-12), elle se
+    # corrige sans redéploiement, et une question ajoutée demain se marque
+    # là où elle s'écrit.
+    sur_les_maries: retiree
     role: ancre la plus forte + message aux mariés
     type: texte_long
     prealable:
@@ -179,6 +199,12 @@ obligatoires:
     limite: 300
 
   - cle: souhait
+    # Ce que le questionnaire réduit des mariés fait de cette question
+    # (EX-MAR-02, EX-MAR-03). Marqué ICI et non dans le code :
+    # `questions.yaml` est la référence éditoriale (EX-QUE-12), elle se
+    # corrige sans redéploiement, et une question ajoutée demain se marque
+    # là où elle s'écrit.
+    sur_les_maries: retiree
     role: montré tel quel aux mariés à la révélation ; jamais transmis au modèle
     usage: revelation
     type: texte_long
@@ -190,6 +216,12 @@ obligatoires:
 
 bonus:
   - cle: lien
+    # Ce que le questionnaire réduit des mariés fait de cette question
+    # (EX-MAR-02, EX-MAR-03). Marqué ICI et non dans le code :
+    # `questions.yaml` est la référence éditoriale (EX-QUE-12), elle se
+    # corrige sans redéploiement, et une question ajoutée demain se marque
+    # là où elle s'écrit.
+    sur_les_maries: retiree
     role: premier palier d'indice
     type: boutons
     question: Comment connais-tu les mariés ?
@@ -199,7 +231,15 @@ bonus:
       - Ami d'enfance
       - Collègue
       - Voisinage
-      - Autrement
+    # « Autrement » a été RETIRÉE des options au profit du champ libre : elle
+    # était un cul-de-sac. `lien` est le premier palier d'indice, et celui qui
+    # la choisissait livrait exactement zéro information aux mariés. Pas de
+    # nouvelle option ici — la question n'est pas un trait de caractère, elle
+    # doit rester précise.
+    autre:
+      libelle: Autrement…
+      exemple: en quelques mots
+      limite: 60
 
   - cle: role_groupe
     role: fonction dans le chapitre
@@ -211,6 +251,12 @@ bonus:
       - Réconforte
       - Calme le jeu
       - Observe en silence
+      - Raconte les histoires
+      - Rend service sans qu'on demande
+    autre:
+      libelle: Autre chose…
+      exemple: en quelques mots, à la première personne
+      limite: 60
 
   - cle: colere
     role: conflit du chapitre
@@ -223,6 +269,12 @@ bonus:
       - Qu'on me presse
       - Le bruit et la foule
       - Qu'on touche à mes proches
+      - Qu'on me prenne de haut
+      - La lâcheté
+    autre:
+      libelle: Autre chose…
+      exemple: en quelques mots, à la première personne
+      limite: 60
 
   - cle: talent
     role: ancre forte

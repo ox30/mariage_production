@@ -25,6 +25,7 @@ import config
 import main
 import modeles
 from modeles import Chronique, Journal, Personne, Tache
+import test_outils
 
 bd.initialiser()
 CODES = main.CODES_LIEUX
@@ -102,8 +103,8 @@ print("TOUT PASSE — horodatages conscients, UTC en base, naïfs refusés")
 
 # --------------------------------------------------------------------------- #
 # --- EX-IA-26 : une seule chronique par personne --------------------------
-premier = bd.creer("Ada", "Lovelace", {"metier": "calcul"}, CODES)
-second = bd.creer("ada", "LOVELACE", {"metier": "calcul, corrigé"}, CODES)
+premier = test_outils.creer_chronique("Ada", "Lovelace", {"metier": "calcul"}, CODES)
+second = test_outils.creer_chronique("ada", "LOVELACE", {"metier": "calcul, corrigé"}, CODES)
 assert premier == second, \
     "une deuxième création doit reconduire vers la chronique existante"
 
@@ -119,7 +120,7 @@ bd.ajouter_bonus(premier, {"talent": "les nombres de Bernoulli"})
 assert bd.lire(premier).etage == 2
 lieu_initial = bd.lire(premier).lieu
 generations = bd.lire(premier).nb_generations
-bd.creer("Ada", "Lovelace", {"metier": "encore autre chose"}, CODES)
+test_outils.creer_chronique("Ada", "Lovelace", {"metier": "encore autre chose"}, CODES)
 assert bd.lire(premier).etage == 2, "l'étage ne doit pas se désynchroniser"
 assert bd.lire(premier).lieu == lieu_initial, "le lieu ne se rejoue pas (EX-IA-08)"
 assert bd.lire(premier).nb_generations == generations, \
@@ -127,10 +128,15 @@ assert bd.lire(premier).nb_generations == generations, \
 assert "Bernoulli" in bd.lire(premier).reponses_json, \
     "les réponses complémentaires survivent"
 
-# Et la recherche par nom, interrogée dès la saisie, retrouve la chronique.
-assert bd.chronique_de("  ADA ", "lovelace") == premier, "insensible à la casse"
-assert bd.chronique_de("Ada", "Byron") is None
-assert bd.chronique_de("", "") is None
+# La recherche par nom ne renvoie plus directement une chronique : depuis
+# l'étape 2 elle renvoie les PERSONNES qui portent ce nom, et c'est l'écran
+# d'identité qui tranche (EX-AUTH-05). `chronique_de(prenom, nom)` faisait un
+# `scalar()` qui, sur deux homonymes, en désignait une au hasard.
+assert bd.resoudre("  ADA ", "lovelace").unique.uuid == identifiant_ada, \
+    "insensible à la casse et aux espaces"
+assert bd.chronique_de_personne(identifiant_ada) == premier
+assert bd.resoudre("Ada", "Byron").candidates == []
+assert bd.resoudre("", "").candidates == []
 
 # Et la contrainte est portée par le schéma, pas seulement par le code.
 with bd.Seance() as s:
@@ -151,7 +157,7 @@ assert all(c.startswith("lieu_") for c in CODES), CODES
 assert len(CODES) == len(set(CODES)) == 10
 
 for i in range(40):
-    bd.creer(f"Equilibre{i}", "Essai", {"metier": "x"}, CODES)
+    test_outils.creer_chronique(f"Equilibre{i}", "Essai", {"metier": "x"}, CODES)
 
 with bd.Seance() as s:
     effectifs = {code: n for code, n in s.execute(
@@ -174,7 +180,7 @@ print(f"TOUT PASSE — répartition {sorted(effectifs.values())} sur codes stabl
 
 # --------------------------------------------------------------------------- #
 # --- EX-IA-21 : les compteurs viennent du journal -------------------------
-uid = bd.creer("Grace", "Hopper", {"metier": "amiral"}, CODES)
+uid = test_outils.creer_chronique("Grace", "Hopper", {"metier": "amiral"}, CODES)
 assert (bd.lire(uid).nb_generations, bd.lire(uid).nb_tentatives) == (0, 0)
 
 for _ in range(4):
@@ -286,7 +292,7 @@ assert uid not in [c.uuid for c in bd.lister()], "une chronique supprimée sort 
 with bd.Seance() as s:
     assert s.get(Chronique, uid) is not None, "la ligne existe toujours (EX-GEN-03)"
 # Et la personne peut repartir de zéro, l'index unique étant conditionnel.
-nouveau = bd.creer("Grace", "Hopper", {"metier": "amiral, deuxième"}, CODES)
+nouveau = test_outils.creer_chronique("Grace", "Hopper", {"metier": "amiral, deuxième"}, CODES)
 assert nouveau != uid, "une nouvelle chronique est possible après suppression douce"
 
 print("TOUT PASSE — contraintes de valeur, suppression douce, refus production")

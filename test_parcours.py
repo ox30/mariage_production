@@ -3,12 +3,14 @@ import base64, os, pathlib, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 os.environ["MOT_DE_PASSE_ADMIN"] = "secret"
 from fastapi.testclient import TestClient
-import main, base_donnees as bd
+import test_outils
+import main, base_donnees as bd, taches
 
 import contextlib
-ctx = TestClient(main.app); ctx.__enter__(); c = ctx
+# La porte du mot de passe unique est franchie une fois ici (EX-AUTH-18).
+ctx = test_outils.client(main.app); c = ctx
 assert c.get("/").status_code == 200, "accueil"
-r = c.post("/questionnaire", data={"prenom": "Florian", "nom": "Test"})
+r = test_outils.entrer_identite(c, "Florian", "Test")
 assert r.status_code == 200 and "Quel est ton métier" in r.text, "questionnaire"
 assert r.text.count('class="ecran') == 10, "7 questions + 2 conditionnelles + récapitulatif"
 
@@ -21,13 +23,16 @@ reponses = {
     "allegeance": "La Lumière",
     "souvenir": "le soir où on a raté le dernier train ensemble",
 }
-r = c.post("/valider", data=reponses, follow_redirects=False)
+r = test_outils.valider(c, reponses)
 assert r.status_code == 303, r.status_code
 uuid = r.headers["location"].split("/")[-1]
 
 r = c.get(f"/portrait/{uuid}")
 assert r.status_code == 200
-time.sleep(1.5)
+# La génération passe désormais par la file (EX-ARC-09). On la vide ici
+# plutôt que d'attendre : une attente arbitraire produit des tests qui
+# passent une fois sur deux.
+assert taches.traiter_une(), "une génération devait être en file"
 r = c.get(f"/portrait/{uuid}/etat")
 print("état après tentative sans clé :", bd.lire(uuid).etat)
 assert "ANTHROPIC_API_KEY absente" in r.text, r.text[:400]
@@ -55,7 +60,7 @@ assert bd.lire(uuid).etage == 2 and "on verra bien" in bd.lire(uuid).reponses_js
 
 # répartition des lieux : 30 créations, écart maximal de 1
 for i in range(30):
-    bd.creer(f"P{i}", "X", {"metier": "x"}, main.CODES_LIEUX)
+    test_outils.creer_chronique(f"P{i}", "X", {"metier": "x"}, main.CODES_LIEUX)
 from collections import Counter
 compte = Counter(p.lieu for p in bd.lister())
 print("répartition :", sorted(compte.values()))
@@ -67,16 +72,16 @@ import importlib
 os.environ["PRENOM_MARIEE"] = "Solène"
 os.environ["PRENOM_MARIE"] = "Gaspard"
 importlib.reload(main)
-c2 = TestClient(main.app); c2.__enter__()
+c2 = test_outils.client(main.app)
 
-r = c2.post("/questionnaire", data={"prenom": "Ana", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Ana", "Test")
 assert "Solène" in r.text and "Gaspard" in r.text, "prénoms substitués dans les libellés"
 assert 'name="souvenir_avec"' in r.text, "champ du sélecteur préalable"
 assert 'class="choix prealable"' in r.text, "boutons du sélecteur préalable"
 
 donnees = dict(reponses); donnees.update({"prenom": "Ana", "nom": "Test",
                                           "souvenir_avec": "Solène"})
-r = c2.post("/valider", data=donnees, follow_redirects=False)
+r = test_outils.valider(c2, donnees)
 uid2 = r.headers["location"].split("/")[-1]
 assert '"souvenir_avec": "Solène"' in bd.lire(uid2).reponses_json, "réponse préalable stockée"
 
@@ -92,11 +97,11 @@ assert "jamais écrire" in msg
 print("TOUT PASSE — sélecteur préalable et prénoms des mariés")
 
 # --- Bifurcation avant génération -------------------------------------------
-r = c2.post("/questionnaire", data={"prenom": "Bea", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Bea", "Test")
 assert 'data-suite="bonus"' in r.text and "Créer mon personnage" in r.text, "écran de bifurcation"
 
 d = dict(donnees); d.update({"prenom": "Bea", "nom": "Test", "suite": "bonus"})
-r = c2.post("/valider", data=d, follow_redirects=False)
+r = test_outils.valider(c2, d)
 assert "/bonus/" in r.headers["location"] and "/questions" in r.headers["location"]
 uid3 = r.headers["location"].split("/")[2]
 assert bd.lire(uid3).etat == "brouillon", bd.lire(uid3).etat
@@ -120,7 +125,7 @@ msg = ia._construire_message(main.CONFIG, {
 assert "sans complément" in msg and "Exploite-les toutes" in msg
 
 d2 = dict(donnees); d2.update({"prenom": "Cyd", "nom": "Test", "suite": "bonus"})
-uid4 = c2.post("/valider", data=d2, follow_redirects=False).headers["location"].split("/")[2]
+uid4 = test_outils.valider(c2, d2).headers["location"].split("/")[2]
 c2.post(f"/bonus/{uid4}", data={"phrase": "on verra", "talent": "je siffle"},
         follow_redirects=False)
 assert bd.lire(uid4).etage == 2
@@ -133,7 +138,7 @@ assert c2.get(f"/bonus/{uid4}", follow_redirects=False).status_code == 303
 print("TOUT PASSE — bifurcation avant génération")
 
 # --- Boutons de la bifurcation : libellé et action doivent concorder ---------
-r = c2.post("/questionnaire", data={"prenom": "Dan", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Dan", "Test")
 assert 'name="suite" id="champ-suite"' in r.text, "le choix passe par un champ caché"
 assert r.text.count('data-suite="maintenant"') == 1
 assert r.text.count('data-suite="bonus"') == 1
@@ -146,13 +151,13 @@ for bloc in _re.findall(r'<button[^>]*class="[^"]*envoi[^"]*"[^>]*>', r.text):
 
 # le champ caché pilote réellement le routage
 d = dict(donnees); d.update({"prenom": "Dan", "nom": "Test", "suite": "bonus"})
-assert "/bonus/" in c2.post("/valider", data=d, follow_redirects=False).headers["location"]
+assert "/bonus/" in test_outils.valider(c2, d).headers["location"]
 d["suite"] = "maintenant"
-assert "/portrait/" in c2.post("/valider", data=d, follow_redirects=False).headers["location"]
+assert "/portrait/" in test_outils.valider(c2, d).headers["location"]
 
 # sortie du questionnaire complémentaire par le champ caché
 d2 = dict(donnees); d2.update({"prenom": "Eve", "nom": "Test", "suite": "bonus"})
-uid5 = c2.post("/valider", data=d2, follow_redirects=False).headers["location"].split("/")[2]
+uid5 = test_outils.valider(c2, d2).headers["location"].split("/")[2]
 r = c2.get(f"/bonus/{uid5}/questions")
 assert 'data-suite="sortie"' in r.text and 'class="retour envoi"' in r.text
 c2.post(f"/bonus/{uid5}", data={"suite": "sortie", "phrase": "ignorée"},
@@ -203,7 +208,7 @@ assert "décor du portrait, pas son sujet" in msg
 print("TOUT PASSE — cloisonnement par destination")
 
 # --- Ombre : questions conditionnelles, peuples, cloisonnement --------------
-r = c2.post("/questionnaire", data={"prenom": "Fay", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Fay", "Test")
 assert 'data-condition-cle="allegeance"' in r.text
 assert r.text.count('data-condition-valeur="L&#39;Ombre"') == 2, "deux écrans conditionnels"
 assert "Un monstre, et j'assume" in r.text.replace("&#39;", "'")
@@ -224,7 +229,7 @@ sombre.update({"prenom": "Fay", "nom": "Test", "allegeance": "L'Ombre",
                "attachement": "La nature",
                "monstre": "Un monstre, et j'assume",
                "destin": "Oui, et que ce soit spectaculaire", "suite": "maintenant"})
-uid6 = c2.post("/valider", data=sombre, follow_redirects=False).headers["location"].split("/")[-1]
+uid6 = test_outils.valider(c2, sombre).headers["location"].split("/")[-1]
 stocke = bd.lire(uid6).reponses_json
 assert "spectaculaire" in stocke and "j'assume" in stocke, "les deux réponses sont stockées"
 
@@ -247,7 +252,7 @@ assert "jamais humiliant" in contrat
 print("TOUT PASSE — Ombre : conditionnelles et registres")
 
 # --- Un échec technique ne débite pas le quota de l'invité ------------------
-uid7 = bd.creer("Gil", "Test", {"metier": "x"}, main.CODES_LIEUX)
+uid7 = test_outils.creer_chronique("Gil", "Test", {"metier": "x"}, main.CODES_LIEUX)
 for _ in range(4):
     bd.enregistrer_echec(uid7, "529 overloaded_error")
 ligne = bd.lire(uid7)
@@ -274,7 +279,7 @@ assert bd.lire(uid7).nb_tentatives == avant, "aucun appel au-delà du garde-fou"
 print("TOUT PASSE — un échec ne débite pas le quota")
 
 # --- Un échec de génération ne consomme aucun crédit ------------------------
-uid7 = bd.creer("Gilo", "Test", {"metier": "x"}, main.CODES_LIEUX)
+uid7 = test_outils.creer_chronique("Gilo", "Test", {"metier": "x"}, main.CODES_LIEUX)
 for _ in range(5):
     bd.enregistrer_echec(uid7, "HTTP 529 — overloaded_error")
 assert bd.lire(uid7).nb_generations == 0, "cinq pannes, zéro crédit débité"
@@ -320,7 +325,7 @@ assert "en Comté" in ia._construire_message(main.CONFIG, {
     "lieu": comte, "reponses": base, "noms_interdits": [], "couple": main.COUPLE})
 
 # noms fictifs déjà attribués
-uid8 = bd.creer("Gilon", "Test", {"metier": "x"}, main.CODES_LIEUX)
+uid8 = test_outils.creer_chronique("Gilon", "Test", {"metier": "x"}, main.CODES_LIEUX)
 bd.enregistrer_portrait(uid8, {"nom_fictif": "Skarn Rouille", "peuple": "orque",
                                "portrait": "p", "indice": "i", "fuites_noms": []})
 pris = bd.noms_fictifs_pris()
@@ -348,9 +353,42 @@ assert "LONGUEUR IMPOSÉE : 220 mots" in long_
 assert "Exploite-les toutes" in long_, "à douze réponses, plus de tri à opérer"
 assert "laisse les autres" not in long_
 
+# EX-IA-34 — le plafond de jetons est une BORNE, jamais une facturation : le
+# compteur de sortie n'a aucun rapport avec le nombre de mots visibles, et
+# raccourcir le portrait ne prévient pas la troncature. Il valait 8000 en dur ;
+# depuis l'étape 2 c'est un paramètre reçu, lu dans `ia.jetons_max` du
+# config.yaml du projet. L'assertion suit le déplacement : ce qu'on éprouve,
+# c'est que la valeur de l'appelant est celle qui part, et que le repli reste
+# large.
 assert ia.MODELE_DEFAUT == "claude-sonnet-5"
-import inspect
-assert '"max_tokens": 8000' in inspect.getsource(ia.generer)
+assert ia.JETONS_MAX_DEFAUT == 8000
+import httpx as _httpx
+_envoye = {}
+_vrai_post = _httpx.post
+
+
+def _post_espion(url, json=None, headers=None, timeout=None):
+    _envoye.update(json or {})
+    raise _httpx.ConnectTimeout("interrompu après capture")
+
+
+_httpx.post = _post_espion
+os.environ["ANTHROPIC_API_KEY"] = "cle-de-test"
+try:
+    for envoi, attendu in ((None, 8000), (1234, 1234)):
+        _envoye.clear()
+        try:
+            ia.generer(main.CONFIG, {"lieu": comte, "reponses": {"metier": "x"},
+                                     "noms_interdits": [], "couple": main.COUPLE,
+                                     "modele": "modele-passe",
+                                     "jetons_max": envoi})
+        except ia.ErreurGeneration:
+            pass
+        assert _envoye.get("max_tokens") == attendu, _envoye.get("max_tokens")
+        assert _envoye.get("model") == "modele-passe", _envoye.get("model")
+finally:
+    _httpx.post = _vrai_post
+    os.environ.pop("ANTHROPIC_API_KEY", None)
 print("TOUT PASSE — longueur adaptée au volume")
 
 # --- Le vœu est au premier étage, et n'atteint jamais le modèle -------------
@@ -359,14 +397,14 @@ assert [q["cle"] for q in main.CONFIG["obligatoires"]][-1] == "souhait", \
 assert "souhait" not in [q["cle"] for q in main.CONFIG["bonus"]]
 assert main.NB_BONUS == 5 and main.NB_BONUS_MOT == "cinq"
 
-r = c2.post("/questionnaire", data={"prenom": "Hal", "nom": "Test"})
+r = test_outils.entrer_identite(c2, "Hal", "Test")
 assert "Que souhaites-tu à Solène et Gaspard" in r.text.replace("&#39;", "'")
 assert "cinq questions de plus" in r.text.lower()
 
 avec_voeu = dict(donnees)
 avec_voeu.update({"prenom": "Hal", "nom": "Test", "souhait": "Tout le bonheur du monde",
                   "suite": "maintenant"})
-uid9 = c2.post("/valider", data=avec_voeu, follow_redirects=False).headers["location"].split("/")[-1]
+uid9 = test_outils.valider(c2, avec_voeu).headers["location"].split("/")[-1]
 stocke = bd.lire(uid9).reponses_json
 assert "Tout le bonheur du monde" in stocke, "le vœu est bien enregistré dès l'étage 1"
 msg = ia._construire_message(main.CONFIG, {
@@ -404,7 +442,7 @@ assert mod_noms.initiales("jean", "d'alembert") == "J. A."
 assert mod_noms.initiales("anne-marie", "von gunten") == "A.-M. G."
 
 # la capitalisation a lieu à la création, une seule fois
-uid10 = bd.creer("jean-pierre", "GAGNEBIN", {"metier": "x"}, main.CODES_LIEUX)
+uid10 = test_outils.creer_chronique("jean-pierre", "GAGNEBIN", {"metier": "x"}, main.CODES_LIEUX)
 ligne = bd.lire(uid10)
 assert ligne.prenom == "Jean-Pierre" and ligne.nom == "Gagnebin"
 assert "Jean-Pierre" in bd.tous_les_prenoms() and "Gagnebin" in bd.tous_les_prenoms()
@@ -412,13 +450,15 @@ print("TOUT PASSE — capitalisation et initiales")
 
 # --- Genre du personnage ----------------------------------------------------
 # Cas réel du 18 août : « Jean-Pascal » a produit un personnage féminin.
-r = c2.post("/questionnaire", data={"prenom": "jean-pascal", "nom": "van der maas",
-                                    "genre": "masculin"})
-assert 'name="genre" value="masculin"' in r.text, "le genre traverse le questionnaire"
+r = test_outils.entrer_identite(c2, "jean-pascal", "van der maas", "masculin")
+# EX-IA-36 — le genre est posé à l'écran d'identité, jamais dans le
+# questionnaire. Ce qu'on éprouve maintenant, c'est qu'il ATTEINT la personne :
+# le champ caché du questionnaire ne le portait que par accident du parcours.
+assert bd.resoudre("jean-pascal", "van der maas").unique.genre == "masculin"
 
 d = dict(donnees); d.update({"prenom": "jean-pascal", "nom": "van der maas",
                              "genre": "masculin", "suite": "maintenant"})
-uid11 = c2.post("/valider", data=d, follow_redirects=False).headers["location"].split("/")[-1]
+uid11 = test_outils.valider(c2, d).headers["location"].split("/")[-1]
 ligne = bd.lire(uid11)
 assert ligne.genre == "masculin"
 assert ligne.prenom == "Jean-Pascal" and ligne.nom == "van der Maas"
@@ -468,9 +508,7 @@ premieres = {"metier": "Opérateur du trafic", "attachement": "Un travail fait p
              "defaut": "Je veux tout contrôler", "objet": "Mes clubs",
              "allegeance": "La Lumière", "souvenir_avec": "Les deux",
              "souvenir": "Une initiation au golf", "souhait": "Du bonheur"}
-r = c.post("/valider", data={"prenom": "Rejoue", "nom": "Essai",
-                             **premieres},
-           follow_redirects=False)
+r = test_outils.valider(c, {"prenom": "Rejoue", "nom": "Essai", **premieres})
 uid_rejoue = r.headers["location"].rsplit("/", 1)[-1]
 bd.ajouter_bonus(uid_rejoue, {"talent": "Créateur de cette application"})
 bd.enregistrer_portrait(uid_rejoue, {"nom_fictif": "Borin", "peuple": "nain",
@@ -480,16 +518,18 @@ avant_etage = bd.lire(uid_rejoue).etage
 avant_generations = bd.lire(uid_rejoue).nb_generations
 avant_lieu = bd.lire(uid_rejoue).lieu
 
-# 1. La saisie du nom seule reconduit, avant toute question.
-r = c.post("/questionnaire", data={"prenom": "rejoue", "nom": "ESSAI"},
-           follow_redirects=False)
-assert r.status_code == 303, "la saisie du nom doit reconduire, pas questionner"
-assert r.headers["location"] == f"/portrait/{uid_rejoue}", r.headers["location"]
+# 1. La saisie du nom seule reconduit, avant toute question — et depuis
+# EX-AUTH-09 elle le DIT, au lieu de rediriger en silence. C'est l'écart
+# « reconduction muette » de CONVENTIONS.md qui se referme ici.
+r = test_outils.entrer_identite(c, "rejoue", "ESSAI")
+assert r.status_code == 200, "la saisie du nom doit reconduire, pas questionner"
+assert "déjà un personnage" in r.text, r.text[:300]
+assert f"/portrait/{uid_rejoue}" in r.text, "l'écran doit mener au personnage existant"
+assert "Quel est ton métier" not in r.text, "le questionnaire ne doit pas rouvrir"
 
 # 2. Et le formulaire posté directement ne passe pas non plus.
-r = c.post("/valider", data={"prenom": "Rejoue", "nom": "Essai",
-                             "metier": "espion", "souhait": "autre chose"},
-           follow_redirects=False)
+r = test_outils.valider(c, {"prenom": "Rejoue", "nom": "Essai",
+                            "metier": "espion", "souhait": "autre chose"})
 assert r.headers["location"] == f"/portrait/{uid_rejoue}", "porte dérobée ouverte"
 
 relue = bd.lire(uid_rejoue)
@@ -511,32 +551,30 @@ base = {"metier": "Fauconnier", "attachement": "Ma famille",
         "defaut": "Je parle trop", "objet": "Ma longue-vue",
         "allegeance": "La Lumière", "souvenir_avec": "Les deux",
         "souvenir": "Un été à la mer", "souhait": "Beaucoup de joie"}
-r = c.post("/valider", data={"prenom": "Repri", "nom": "Se", **base},
-           follow_redirects=False)
+r = test_outils.valider(c, {"prenom": "Repri", "nom": "Se", **base})
 uid_r = r.headers["location"].rsplit("/", 1)[-1]
 
 
-def _attendre(condition, limite=3.0):
-    """Attend qu'un fil de génération ait fini d'écrire.
+def _vider_file(maximum=50):
+    """Exécute les tâches en attente, ici et maintenant.
 
-    Sans cette attente, une mesure prise juste après la requête constate
-    l'état d'AVANT le travail qu'elle prétend vérifier — et l'assertion passe
-    quoi qu'il arrive.
+    Remplace l'attente d'un fil de fond : mesurer juste après la requête
+    constaterait l'état d'AVANT le travail qu'on prétend vérifier, et
+    l'assertion passerait quoi qu'il arrive.
     """
-    import time as _t
-    fin = _t.monotonic() + limite
-    while _t.monotonic() < fin:
-        if condition():
-            return True
-        _t.sleep(0.05)
-    return False
+    faites = 0
+    while faites < maximum and taches.traiter_une():
+        faites += 1
+    return faites
 
 
 # La création a lancé une génération qui va échouer, faute de clé d'API. Il
 # faut la laisser s'inscrire, sinon son échec tardif se confondrait avec celui
 # de la reprise et rendrait la mesure suivante ininterprétable.
-assert _attendre(lambda: bd.lire(uid_r).etat == "echouee"), \
-    "le fil de génération de la création n'a pas rendu la main"
+# Les blocs précédents ont pu laisser des tâches : on vide tout, sinon les
+# décomptes qui suivent mesureraient le travail des autres.
+assert _vider_file() >= 1, "une génération devait être en file"
+assert bd.lire(uid_r).etat == "echouee", "faute de clé d'API"
 bd.enregistrer_portrait(uid_r, {"nom_fictif": "Aldor", "peuple": "homme",
                                 "portrait": "p", "indice": "i", "fuites_noms": []})
 
@@ -588,8 +626,8 @@ assert relue.etage == 1, "aucune réponse du second étage n'a été donnée"
 # On compare un ÉCART, pas une valeur absolue : les valeurs absolues se
 # décalent au premier bloc inséré, et une assertion qui ne peut pas échouer
 # ne prouve rien.
-assert _attendre(lambda: bd.lire(uid_r).nb_tentatives > avant_tentatives), \
-    "la reprise doit déclencher une génération (EX-IA-04)"
+assert _vider_file() == 1, \
+    "la reprise doit mettre exactement une génération en file (EX-IA-04)"
 assert bd.lire(uid_r).nb_tentatives == avant_tentatives + 1, \
     "et exactement une"
 
@@ -618,7 +656,7 @@ r = c.get(f"/portrait/{uid_r}")
 assert "questions de plus" not in r.text, "le second étage ne se propose qu'une fois"
 
 # --- Quota épuisé : la reprise est fermée -----------------------------------
-uid_q = bd.creer("Quota", "Plein", dict(base), main.CODES_LIEUX)
+uid_q = test_outils.creer_chronique("Quota", "Plein", dict(base), main.CODES_LIEUX)
 for _ in range(main.MAX_GENERATIONS):
     bd.enregistrer_portrait(uid_q, {"nom_fictif": "X", "peuple": "nain",
                                     "portrait": "p", "indice": "i",
@@ -628,3 +666,113 @@ assert r.status_code == 303, "reprendre sans pouvoir régénérer n'a pas de sen
 r = c.get(f"/portrait/{uid_q}")
 assert "reprendre" not in r.text and "épuisé vos réécritures" in r.text
 print("TOUT PASSE — reprise des réponses, étage monotone, quota respecté")
+
+
+# --- Les options « Autre », et sur quelles questions (EX-QUE-17) -----------
+# Constat après la répétition : à six options et cent invités, dix-sept
+# personnes partagent le même défaut. Deux remèdes pour deux problèmes
+# distincts — plus d'options agit sur TOUT LE MONDE, le champ libre agit sur
+# celui à qui rien ne convient.
+_par_cle = {q["cle"]: q for bloc in ("obligatoires", "bonus")
+            for q in main.CONFIG[bloc]}
+
+for _cle, _options in (("defaut", 8), ("colere", 8), ("role_groupe", 7)):
+    assert len(_par_cle[_cle]["options"]) == _options, \
+        (_cle, len(_par_cle[_cle]["options"]))
+    assert _par_cle[_cle].get("autre"), f"{_cle} doit offrir un champ libre"
+
+# `lien` reçoit le champ SANS option de plus : ce n'est pas un trait de
+# caractère, c'est le premier palier d'indice, et il doit rester précis.
+# « Autrement » a été retirée — celui qui la choisissait livrait zéro
+# information aux mariés.
+assert _par_cle["lien"].get("autre"), "« Autrement » sans champ est un cul-de-sac"
+assert "Autrement" not in _par_cle["lien"]["options"], _par_cle["lien"]["options"]
+
+# Les questions STRUCTURANTES n'en ont pas. `attachement` détermine le peuple,
+# croisé avec l'allégeance (EX-IA-09) : une réponse libre laisserait le modèle
+# choisir seul, et la répartition sur les dix-huit peuples cesserait d'être
+# maîtrisée. Les trois autres sont binaires.
+for _cle in ("attachement", "allegeance", "monstre", "destin"):
+    assert not _par_cle[_cle].get("autre"), \
+        f"{_cle} est structurante : un champ libre y casserait la répartition"
+assert len(_par_cle["attachement"]["options"]) == 6
+
+# Aucune clé n'a été renommée : le banc d'essai figé doit rester relisible.
+assert set(_par_cle) >= {"metier", "attachement", "defaut", "objet", "allegeance",
+                         "monstre", "destin", "souvenir", "souhait", "lien",
+                         "role_groupe", "colere", "talent", "phrase"}
+print("TOUT PASSE — options et champs libres sur les seules questions ouvertes")
+
+# --- Le texte libre voyage sous la MÊME clé qu'une option -----------------
+# C'est ce qui fait qu'`ia.py` n'a rien à changer et que `reponses_json` reste
+# homogène. EX-SEC-16 traite déjà les réponses comme des données non fiables.
+c_libre = test_outils.client(main.app)
+r = test_outils.entrer_identite(c_libre, "Champ", "Libre")
+assert r.text.count("ouvre-libre") >= 1, "le bouton « Autre » manque à l'écran"
+assert 'aria-expanded="false"' in r.text, "le champ doit être replié au départ"
+# Et replié POUR DE VRAI : `aria-expanded` ne cache rien, c'est `hidden` qui le
+# fait. Un champ de saisie ouvert d'emblée ferait du clavier le chemin par
+# défaut, alors que le bouton doit le rester (EX-QUE-17).
+assert 'class="zone-libre" data-cle="defaut" hidden' in r.text, \
+    "la zone de saisie doit être masquée tant qu'on n'a pas touché « Autre »"
+# Le champ écrit sous la clé de la QUESTION : une clé à part obligerait
+# `ia.py` à fusionner, et ferait diverger `reponses_json`.
+assert '<input type="text" class="saisie-libre" data-cle="defaut"' in r.text, \
+    "le champ libre doit écrire sous la clé de la question elle-même"
+
+p_libre = bd.resoudre("Champ", "Libre").unique
+inedit = "Je collectionne les trains miniatures"
+uid_libre = c_libre.post("/valider",
+                         data={"personne_uuid": p_libre.uuid, "metier": "aiguilleur",
+                               "defaut": inedit},
+                         follow_redirects=False).headers["location"].rsplit("/", 1)[-1]
+assert _json.loads(bd.lire(uid_libre).reponses_json)["defaut"] == inedit
+
+# Et il atteint le modèle comme n'importe quelle réponse, sans traitement à
+# part : c'était toute la raison de ne pas créer une seconde clé.
+_envoye = {}
+import httpx as _hx
+_vrai = _hx.post
+
+
+def _espion(url, json=None, headers=None, timeout=None):
+    _envoye.update(json or {})
+    raise _hx.ConnectTimeout("interrompu après capture")
+
+
+_hx.post = _espion
+os.environ["ANTHROPIC_API_KEY"] = "cle-de-test"
+try:
+    try:
+        ia.generer(main.CONFIG, {"lieu": comte, "couple": main.COUPLE,
+                                 "reponses": _json.loads(bd.lire(uid_libre).reponses_json),
+                                 "noms_interdits": []})
+    except ia.ErreurGeneration:
+        pass
+finally:
+    _hx.post = _vrai
+    os.environ.pop("ANTHROPIC_API_KEY", None)
+assert inedit in str(_envoye), "la réponse libre n'atteint pas le modèle"
+print("TOUT PASSE — la réponse libre voyage sous la même clé et atteint le modèle")
+
+# --- Reprendre une réponse libre rouvre le champ, pas un écran vide -------
+# Le gabarit marque un bouton « retenu » quand la réponse égale une option. Un
+# texte libre n'égale aucune option : sans traitement, l'invité qui revient
+# corriger verrait son écran vierge et son texte perdu.
+page = c_libre.get(f"/portrait/{uid_libre}/reprendre").text
+# Sur le champ LIBRE et non n'importe où dans la page : le champ caché de la
+# question porte la même valeur, et l'assertion passait donc même quand le
+# champ visible revenait vide.
+_libre_recharge = _re.search(
+    r'<input type="text" class="saisie-libre"[^>]*value="([^"]*)"', page)
+assert _libre_recharge and _libre_recharge.group(1) == inedit, \
+    f"le texte libre n'est pas rechargé dans son champ : {_libre_recharge}"
+assert 'aria-expanded="true"' in page, "le champ doit être déplié à la reprise"
+assert page.count("choix retenu") == page.count('class="choix retenu"')
+
+# Et une réponse qui EST une option ne déplie rien.
+uid_option = test_outils.creer_chronique(
+    "Option", "Simple", {"metier": "x", "defaut": "Je parle trop"}, main.CODES_LIEUX)
+page = c_libre.get(f"/portrait/{uid_option}/reprendre").text
+assert 'aria-expanded="false"' in page, "une option ne doit pas ouvrir le champ libre"
+print("TOUT PASSE — reprendre une réponse libre rouvre le champ avec son texte")

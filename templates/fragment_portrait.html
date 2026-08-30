@@ -3,17 +3,44 @@
   <h1>Il reste {{ nb_bonus_mot }} questions</h1>
   <p>Vos sept premières réponses sont enregistrées. Votre chronique s'écrira dès
      que vous aurez terminé — ou tout de suite, si vous préférez.</p>
+  <p class="discret">Le Conseil vous convoquera {{ locution_lieu(p.lieu) }}.</p>
   <a class="action" href="/bonus/{{ p.uuid }}/questions">Continuer</a>
 
 {% elif p.etat in ("en_attente", "en_cours") %}
   <div hx-get="/portrait/{{ p.uuid }}/etat" hx-trigger="every 2s" hx-target="#zone-portrait">
     <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
-    <h1>On vous attendait ici</h1>
-    <p>Le Conseil vous a convoqué en <strong>{{ libelle_lieu(p.lieu) }}</strong>. L'ennemi est
-       proche, et l'on manque de bras.</p>
+    {# Le lieu de la CONVOCATION n'est pas la table où l'on est assis, et les
+       deux peuvent porter le même nom sans que ce soit une erreur. Le futur
+       le dit — « vous convoquera », pas « vous a convoqué » — et il évite au
+       passage l'accord que le passé composé imposait : « convoqué » se lisait
+       faux pour une invitée sur deux. #}
+    <h1>On vous attend ailleurs</h1>
+    <p>Le Conseil vous convoquera <strong>{{ locution_lieu(p.lieu) }}</strong>. Pas ce soir :
+       ce soir vous êtes assis parmi nous. Mais l'ennemi est proche, et l'on
+       manque de bras — faites vos bagages.</p>
     <div class="attente">
       <p>Votre chronique s'écrit<span class="points"></span></p>
-      <p class="discret">Une dizaine de secondes.</p>
+      {# EX-IA-25 — position et ordre de grandeur, jamais un renvoi : quelqu'un
+         qu'on renvoie à 22 h 30 ne revient pas. EX-IA-32 — le temps affiché
+         est celui réellement écoulé depuis la validation, file et tentatives
+         échouées comprises. #}
+      {# L'arrondi ne descend jamais sous dix secondes : « environ 0 secondes »
+         pendant qu'une génération tourne serait pire que pas de chiffre. #}
+      {% set annonce = [10, (attente_s / 10) | round | int * 10] | max if attente_s else 0 %}
+      {% if position and position > 1 %}
+        <p class="discret">{{ position }}<sup>e</sup> dans la file.
+          {% if annonce %}Environ {{ annonce }} secondes.{% endif %}
+        </p>
+      {% elif annonce %}
+        <p class="discret">Environ {{ annonce }} secondes.</p>
+      {% else %}
+        <p class="discret">Une trentaine de secondes.</p>
+      {% endif %}
+      {% if ecoule_s and ecoule_s > 45 %}
+        <p class="discret">Vous patientez depuis {{ ecoule_s }} secondes. Rien
+           n'est perdu : vous pouvez fermer cette page et rouvrir votre lien,
+           votre chronique s'écrira quand même.</p>
+      {% endif %}
     </div>
   </div>
 
@@ -41,6 +68,45 @@
       {% endfor %}
     </div>
   </div>
+
+  {# LA QUITTANCE (EX-PHO-15). Sans elle, l'invité ne sait pas si sa photo est
+     arrivée — donc il renvoie, et un renvoi consomme une modification. Le
+     silence coûtait du budget. Quatre états, parce qu'EX-PHO-10 garantit
+     qu'il existe toujours une fenêtre entre « reçue » et « affichable ». #}
+  {% if photo is none %}
+    <a class="action sobre" href="/photo/{{ p.uuid }}">Ajouter votre photo</a>
+    <p class="discret">Elle accompagnera votre chronique. Facultative.</p>
+
+  {% elif photo.etat == "traitement" %}
+    <p class="quittance"><strong>Votre photo est arrivée.</strong>
+       Le Conseil la prépare — inutile de la renvoyer.</p>
+    {# EX-CYC-13 — le décompte est répété au moment où il éclaire une
+       décision, jamais laissé à la seule aide. #}
+    <p class="discret">Il vous reste {{ budget_photo.restants }}
+       changement{{ "s" if budget_photo.restants != 1 else "" }}.</p>
+    {% if not budget_photo.epuise %}
+      <a class="action sobre" href="/photo/{{ p.uuid }}">Changer de photo</a>
+    {% endif %}
+
+  {% elif photo.etat == "prete" %}
+    <img class="vignette" src="/photo/{{ p.uuid }}/vignette?v={{ photo.uuid[:12] }}" alt="Votre photo">
+    <p class="discret">Il vous reste {{ budget_photo.restants }}
+       changement{{ "s" if budget_photo.restants != 1 else "" }}.</p>
+    {% if not budget_photo.epuise %}
+      <a class="action sobre" href="/photo/{{ p.uuid }}">Changer de photo</a>
+    {% endif %}
+
+  {% else %}
+    {# EX-PHO-33 — échec de CONVERSION, pas d'envoi : le fichier est intact sur
+       le volume, et le retrait est GRATUIT. Le dire, sinon l'invité croit
+       avoir perdu un crédit et n'ose plus rien. #}
+    <p class="alerte"><strong>Votre photo n'a pas pu être préparée.</strong>
+       Elle est bien arrivée, mais le Conseil n'a pas su la lire.</p>
+    <p class="discret">Cela ne vous a rien coûté : il vous reste
+       {{ budget_photo.restants }}
+       changement{{ "s" if budget_photo.restants != 1 else "" }}.</p>
+    <a class="action sobre" href="/photo/{{ p.uuid }}">Reprendre une photo</a>
+  {% endif %}
 
   <form method="post" action="/portrait/{{ p.uuid }}/valider">
     <button class="action" type="submit">C'est bien moi</button>

@@ -1,9 +1,22 @@
-{% extends "base.html" %}
+{% extends "admin_base.html" %}
 {% block titre %}Tableau{% endblock %}
-{% block corps %}
-<div class="enveloppe" style="max-width:52rem">
-  <p class="surtitre">Le Livre des Convoqués</p>
-  <h1>Ce que ça coûte</h1>
+{% block panneau %}
+  <h1>{% if sur_le_test %}Les chroniques de test{% else %}Ce que ça coûte{% endif %}</h1>
+
+  {# EX-TST-05 — production par défaut, test sur demande explicite. Deux
+     adresses distinctes plutôt qu'un basculement en mémoire : chaque vue se
+     met en signet, se recharge, et l'on sait toujours ce qu'on regarde. #}
+  <p class="onglets" style="margin-bottom:1.4rem">
+    <a class="onglet{% if not sur_le_test %} actif{% endif %}"
+       href="/admin/tableau">Production</a>
+    <a class="onglet{% if sur_le_test %} actif{% endif %}"
+       href="/admin/tableau?test=oui">Test</a>
+  </p>
+
+  {% if sur_le_test %}
+    <p class="discret">Ces chroniques n'apparaissent ni sur la carte des mariés,
+       ni dans l'export de production, ni dans aucun total (EX-TST-04).</p>
+  {% endif %}
 
   <div class="bilan">
     <div><span class="valeur chiffre">{{ participations|length }}</span>
@@ -18,15 +31,64 @@
          <span class="etiquette">jetons sortie</span></div>
     <div><span class="valeur chiffre">{{ echecs }}</span>
          <span class="etiquette">échecs</span></div>
+    {# EX-ADM-18 — « photos reçues ». Les quatre chiffres se lisent ensemble :
+       « 40 reçues » ne dit rien si l'on ignore combien attendent encore leur
+       conversion. #}
+    <div><span class="valeur chiffre">{{ photos.recues }}</span>
+      <span class="etiquette">photos reçues</span></div>
+    <div><span class="valeur chiffre">{{ photos.traitement }}</span>
+      <span class="etiquette">en conversion</span></div>
+    <div><span class="valeur chiffre">{{ photos.echouee }}</span>
+      <span class="etiquette">photos en échec</span></div>
+    {# Ce chiffre doit être à ZÉRO avant la bascule : une photo qui n'existe
+       que sur le volume disparaît avec lui, et aucun instantané ne la porte. #}
+    <div><span class="valeur chiffre{% if photos.hors_volume %} alerte{% endif %}">{{ photos.hors_volume }}</span>
+      <span class="etiquette">photos hors du stockage objet</span></div>
     <div><span class="valeur chiffre">{{ fuites }}</span>
          <span class="etiquette">fuites de noms</span></div>
   </div>
+
+  {# Le palier de débit, relevé sur la dernière réponse de l'API. Il se lisait
+     jusque-là sur la console Anthropic — une fois, hors de l'application,
+     donc périmé le lendemain et invisible le soir où il compterait.
+
+     L'ÂGE est affiché avec : sans lui, on lirait « reste 74 200 » en croyant
+     que c'est maintenant, alors que les compteurs se réinitialisent à la
+     minute. #}
+  <h2>Débit de l'API</h2>
+  {% if not debit %}
+    <p class="discret">Aucun relevé : la limite s'affichera ici dès la
+       prochaine génération. Elle se lit aussi sur la console Anthropic,
+       page <em>Usage</em>.</p>
+  {% else %}
+    <table>
+      <tr><th>Axe</th><th class="chiffre">Limite / min</th>
+          <th class="chiffre">Restant</th><th class="chiffre">Utilisé</th></tr>
+      {% for nom, axe in debit.axes.items() %}
+      <tr>
+        <td>{{ {"sortie": "Jetons de sortie", "entree": "Jetons d'entrée",
+                "requetes": "Requêtes"}.get(nom, nom) }}</td>
+        <td class="chiffre">{{ axe.limite if axe.limite is not none else "—" }}</td>
+        <td class="chiffre">{{ axe.reste if axe.reste is not none else "—" }}</td>
+        <td class="chiffre">{{ axe.part_utilisee ~ " %" if axe.part_utilisee is not none else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="discret">
+      Relevé il y a {{ debit.age_s }} s. Les compteurs se réinitialisent à la
+      minute&nbsp;: un relevé ancien ne dit rien de l'instant présent.
+      La limite vaut pour toute l'organisation, pas pour cette clé seule —
+      un autre outil qui appellerait l'API pendant la soirée puiserait au même
+      budget. Si la sortie sature, baisser <code>worker.fils</code> dans
+      <code>config.yaml</code> agit sans redéployer (EX-ARC-20).
+    </p>
+  {% endif %}
 
   <p class="discret">Multipliez les jetons par cent participants et trois
      générations pour estimer la soirée réelle. Les tarifs figurent sur la
      console Anthropic ; ils changent, ne les codez pas en dur.</p>
 
-  <p><a class="action sobre" href="/tableau/export.json">Export JSON complet</a></p>
+  <p><a class="action sobre" href="/admin/tableau/export.json{% if sur_le_test %}?test=oui{% endif %}">Export JSON complet</a></p>
 
   <h2>Détail</h2>
   <table>
@@ -58,5 +120,4 @@
     <tr><td>{{ lieu }}</td><td class="chiffre">{{ groupe|length }}</td></tr>
     {% endfor %}
   </table>
-</div>
 {% endblock %}

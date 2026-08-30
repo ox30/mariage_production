@@ -6,8 +6,11 @@
 <div class="progression"><span id="jauge"></span></div>
 
 <form method="post" action="{{ action }}" id="formulaire">
-  <input type="hidden" name="prenom" value="{{ prenom }}">
-  <input type="hidden" name="nom" value="{{ nom }}">
+  {# L'identité voyage par son UUID et non par (prénom, nom) : deux homonymes
+     réels ne se distinguent que par lui, et reposter un nom rouvrirait la
+     résolution que l'écran d'identité vient de trancher. Le prénom reste, mais
+     pour l'affichage seul. #}
+  <input type="hidden" name="personne_uuid" value="{{ personne_uuid or '' }}">
   <input type="hidden" name="genre" value="{{ genre }}">
 
   <div class="enveloppe">
@@ -82,11 +85,39 @@
       {% endif %}
 
       {% if q.type == "boutons" %}
+        {% set libre = q.autre and reponses.get(q.cle)
+                       and reponses.get(q.cle) not in q.options %}
         {% for option in q.options %}
           <button type="button" class="choix{% if reponses.get(q.cle) == option %} retenu{% endif %}"
                   data-cle="{{ q.cle }}"
                   data-valeur="{{ option }}">{{ option }}</button>
         {% endfor %}
+        {% if q.autre %}
+          {# EX-QUE-17 — le bouton reste le chemin par défaut : à 22 h, un verre
+             à la main, taper coûte dix fois plus que toucher. « Autre » se
+             place donc en dernier et discret.
+
+             C'est le SEUL bouton du questionnaire qui n'enchaîne pas — il
+             déplie un champ au lieu de passer à la suite. D'où la classe
+             `ouvre-libre` et l'aspect sobre : identique aux autres, il serait
+             vécu comme un bouton en panne.
+
+             Le texte saisi part sous la MÊME clé que les options : `ia.py` ne
+             change pas, `reponses_json` reste homogène, et la clé n'est pas
+             renommée — le banc d'essai reste compatible. #}
+          <button type="button" class="choix sobre ouvre-libre{% if libre %} retenu{% endif %}"
+                  data-cle="{{ q.cle }}"
+                  aria-expanded="{{ 'true' if libre else 'false' }}">{{ q.autre.libelle }}</button>
+          <div class="zone-libre" data-cle="{{ q.cle }}" {% if not libre %}hidden{% endif %}>
+            {% if q.autre.exemple %}<p class="exemple">{{ q.autre.exemple }}</p>{% endif %}
+            <input type="text" class="saisie-libre" data-cle="{{ q.cle }}"
+                   maxlength="{{ q.autre.limite | default(60) }}" autocomplete="off"
+                   value="{{ reponses.get(q.cle, '') if libre else '' }}">
+            <button type="button" class="action suivant-libre" disabled>
+              {% if reprise %}Garder cette réponse{% else %}Suivant{% endif %}
+            </button>
+          </div>
+        {% endif %}
       {% elif q.type == "texte_long" %}
         <textarea id="saisie-{{ q.cle }}" data-cle="{{ q.cle }}"
                   maxlength="{{ q.limite }}">{{ reponses.get(q.cle, "") }}</textarea>
@@ -242,8 +273,53 @@
     });
   }
 
+  // « Autre » : le seul bouton qui ne passe PAS à la suite. Il déplie un champ
+  // et attend qu'on ait écrit — sans quoi on quitterait l'écran avec une
+  // réponse vide.
+  document.querySelectorAll(".ouvre-libre").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      var section = bouton.closest(".ecran");
+      section.querySelectorAll(".choix:not(.prealable)").forEach(function (b) {
+        b.classList.remove("retenu");
+      });
+      bouton.classList.add("retenu");
+      // Revenir sur une option referme le champ libre : le laisser ouvert
+      // ferait croire que ce qu'on y a tapé compte encore.
+      var libre = section.querySelector(".zone-libre");
+      if (libre) {
+        libre.hidden = true;
+        libre.querySelector(".saisie-libre").value = "";
+        section.querySelector(".ouvre-libre").setAttribute("aria-expanded", "false");
+      }
+      bouton.setAttribute("aria-expanded", "true");
+      var zone = section.querySelector(".zone-libre");
+      zone.hidden = false;
+      var saisie = zone.querySelector(".saisie-libre");
+      saisie.focus();
+      // La réponse est vidée à l'ouverture : l'option touchée juste avant
+      // resterait sinon enregistrée si l'invité change d'avis sans écrire.
+      document.getElementById("champ-" + bouton.dataset.cle).value = saisie.value.trim();
+      zone.querySelector(".suivant-libre").disabled = saisie.value.trim().length === 0;
+    });
+  });
+
+  document.querySelectorAll(".saisie-libre").forEach(function (saisie) {
+    var zone = saisie.closest(".zone-libre");
+    var valider = zone.querySelector(".suivant-libre");
+    function refleter() {
+      var valeur = saisie.value.trim();
+      document.getElementById("champ-" + saisie.dataset.cle).value = valeur;
+      valider.disabled = valeur.length === 0;
+    }
+    saisie.addEventListener("input", refleter);
+    saisie.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !valider.disabled) { e.preventDefault(); avancer(); }
+    });
+    valider.addEventListener("click", function () { if (!valider.disabled) avancer(); });
+  });
+
   // Boutons de choix : on retient, on enchaîne. Un geste, pas deux.
-  document.querySelectorAll(".choix:not(.prealable)").forEach(function (bouton) {
+  document.querySelectorAll(".choix:not(.prealable):not(.ouvre-libre)").forEach(function (bouton) {
     bouton.addEventListener("click", function () {
       var section = bouton.closest(".ecran");
       section.querySelectorAll(".choix:not(.prealable)").forEach(function (b) {

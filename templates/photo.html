@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block titre %}Votre photo{% endblock %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">{{ p.nom_fictif }}</p>
+  <h1>Faites tirer votre portrait</h1>
+
+  {% if budget.epuise %}
+    <p>Vous avez utilisé tous vos changements. Cette photo est la vôtre.</p>
+    <a class="action" href="/fin">Continuer</a>
+  {% else %}
+    {# L'écran ne disait rien de ce qui était déjà arrivé. L'invité y revenait
+       sans savoir où il en était, et le seul chiffre affiché était celui du
+       bouton — « il vous restera N » —, qui parle du futur et non de ce qui
+       est déjà là. EX-CYC-13 veut le décompte au moment de la décision : le
+       voici avant le geste, et non seulement dessus. #}
+    {% if photo is none %}
+      <p>Une photo de vous accompagnera votre chronique. Les mariés la
+         découvriront au moment de vous reconnaître.</p>
+      {# EX-PHO-38 — facultative, et dit comme tel. Exiger la photo exclurait
+         ceux qui refusent d'être photographiés. #}
+      <p class="discret">Elle est facultative : votre chronique tient sans
+         elle.</p>
+    {% else %}
+      {% if photo.etat == "prete" %}
+        <img class="vignette" src="/photo/{{ p.uuid }}/vignette?v={{ photo.uuid[:12] }}"
+             alt="Votre photo">
+        <p class="quittance">Voici la photo que le Livre a retenue.</p>
+      {% elif photo.etat == "traitement" %}
+        <p class="quittance"><strong>Votre photo est arrivée.</strong>
+           Le Conseil la prépare encore.</p>
+      {% else %}
+        <p class="alerte"><strong>Votre photo n'a pas pu être préparée.</strong>
+           Reprenez-en une — cela ne vous a rien coûté.</p>
+      {% endif %}
+      <p class="discret">Il vous reste {{ budget.restants }}
+         changement{{ "s" if budget.restants != 1 else "" }}.</p>
+    {% endif %}
+
+    {# EX-PHO-08 — deux boutons distincts. Un champ unique est proscrit :
+       « Parcourir » n'ouvre pas l'appareil photo sur tous les téléphones. #}
+    <div id="choix_source">
+      <p><label class="action" style="display:block;text-align:center">
+        Prendre une photo
+        <input type="file" accept="image/*" capture="environment" hidden
+               id="entree_capture"></label></p>
+      <p><label class="action sobre" style="display:block;text-align:center">
+        Choisir dans mes photos
+        <input type="file" accept="image/*" hidden
+               id="entree_galerie"></label></p>
+      <p class="discret" style="text-align:center">
+        <a href="/fin">{{ "Terminer" if photo else "Plus tard" }}</a></p>
+    </div>
+
+    {# EX-PHO-26 — deuxième temps. Rien n'est envoyé, rien n'est consommé
+       avant le clic sur « Valider ». L'aperçu est entièrement local. #}
+    <div id="etape_validation" hidden>
+      <img id="apercu" alt="Votre photo, avant envoi"
+           style="max-width:100%;border-radius:0.3rem;display:block;
+                  margin:0 0 1rem">
+      <p id="apercu_ko" class="alerte" hidden>
+        Cette image ne s'affiche pas ici. Elle risque de ne pas s'afficher non
+        plus dans le Livre — reprenez-en une avec l'appareil du téléphone.
+      </p>
+      <p id="refus" class="alerte" hidden></p>
+
+      {# EX-PHO-28 — le décompte est affiché AU MOMENT DE LA DÉCISION, et pas
+         seulement dans l'aide (EX-CYC-13). #}
+      <button class="action" type="button" id="valider">
+        {{ "Remplacer" if photo else "Valider" }} — il vous restera
+        {{ budget.restants - 1 }} changement{{ "s" if budget.restants - 1 != 1 else "" }}
+      </button>
+      <p style="text-align:center;margin-top:0.6rem">
+        <a href="#" id="reprendre">Choisir une autre image</a></p>
+
+      {# EX-PHO-15 — indicateur de progression. Affiché DÈS l'envoi et non au
+         premier événement : mesuré au morceau A, 593 ko n'ont produit qu'un
+         seul événement de progression, et une jauge qui l'attendrait ne
+         s'afficherait jamais sur les petits fichiers. #}
+      <progress id="jauge" value="0" max="100" hidden
+                style="width:100%;margin-top:0.8rem"></progress>
+      <p id="etat" class="discret" aria-live="polite"></p>
+    </div>
+  {% endif %}
+</div>
+
+{% if not budget.epuise %}
+<script>
+(function () {
+  var MAX = {{ taille_max }};
+  var choix = document.getElementById("choix_source");
+  var etape = document.getElementById("etape_validation");
+  var apercu = document.getElementById("apercu");
+  var apercuKo = document.getElementById("apercu_ko");
+  var refus = document.getElementById("refus");
+  var valider = document.getElementById("valider");
+  var jauge = document.getElementById("jauge");
+  var etat = document.getElementById("etat");
+  var retenu = null;
+
+  function montrer(fichier) {
+    retenu = fichier;
+    refus.hidden = true;
+    apercuKo.hidden = true;
+    valider.disabled = false;
+    // Contrôle de taille AVANT l'envoi : être refusé après quarante secondes
+    // d'attente est la pire des façons de l'apprendre. Le serveur refait le
+    // contrôle, et c'est lui qui fait foi.
+    if (fichier.size > MAX) {
+      refus.textContent = "Cette image fait "
+        + (fichier.size / 1048576).toFixed(1) + " Mo, et la limite est de "
+        + Math.round(MAX / 1048576) + " Mo. Choisissez-en une autre.";
+      refus.hidden = false;
+      valider.disabled = true;
+    }
+    apercu.onerror = function () { apercuKo.hidden = false; };
+    apercu.src = URL.createObjectURL(fichier);
+    choix.hidden = true;
+    etape.hidden = false;
+  }
+
+  function reprendre() {
+    retenu = null;
+    etape.hidden = true;
+    choix.hidden = false;
+    etat.textContent = "";
+    jauge.hidden = true;
+  }
+
+  ["entree_capture", "entree_galerie"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", function (e) {
+      if (e.target.files && e.target.files[0]) { montrer(e.target.files[0]); }
+    });
+  });
+  document.getElementById("reprendre").addEventListener("click", function (e) {
+    e.preventDefault();
+    reprendre();
+  });
+
+  valider.addEventListener("click", function () {
+    if (!retenu) { return; }
+    valider.disabled = true;
+    var donnees = new FormData();
+    donnees.append("fichier", retenu);
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "{{ action }}");
+    jauge.hidden = false;
+    jauge.value = 0;
+    etat.textContent = "Envoi en cours…";
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) { jauge.value = (e.loaded / e.total) * 100; }
+    };
+    xhr.onload = function () {
+      jauge.hidden = true;
+      if (xhr.status === 200) {
+        window.location = "{{ suite }}";
+        return;
+      }
+      // EX-PHO-15 — l'échec est explicite et l'envoi reprenable, sans
+      // consommer de modification.
+      var message = "L'envoi n'a pas abouti. Vous pouvez réessayer.";
+      try { message = JSON.parse(xhr.responseText).refus || message; }
+      catch (err) { /* réponse non JSON : on garde le message générique */ }
+      etat.textContent = "";
+      refus.textContent = message;
+      refus.hidden = false;
+      valider.disabled = false;
+    };
+    xhr.onerror = function () {
+      jauge.hidden = true;
+      // EX-AUTH-11 — orienté action, jamais « Erreur ».
+      etat.textContent = "";
+      refus.textContent = "Connexion perdue — vérifiez votre réseau mobile, "
+        + "puis appuyez de nouveau sur Valider.";
+      refus.hidden = false;
+      valider.disabled = false;
+    };
+    xhr.send(donnees);
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

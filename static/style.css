@@ -16,6 +16,40 @@
 
 * { box-sizing: border-box; }
 
+/* LES LIENS.
+   Sans cette règle, tout `<a>` hors bouton prenait le bleu du navigateur et le
+   violet des liens visités — illisibles sur fond nocturne, et étrangers à la
+   palette. Constaté le 25 août sur les onglets d'administration, « ← Revenir »
+   et « Ce n'est pas vous ? ».
+   Le laiton est la seule couleur d'accent du projet : c'est celle des boutons,
+   donc celle que l'œil a déjà appris à suivre. `:visited` est ramené dessus
+   explicitement, sinon le navigateur reprend la main. */
+a, a:link, a:visited { color: var(--laiton); text-decoration: underline;
+  text-underline-offset: 0.18em; }
+a:hover, a:focus { color: var(--brume); }
+
+/* Un lien à l'intérieur d'un paragraphe discret reste discret : il n'a pas à
+   crier plus fort que la phrase qui le porte. */
+.discret a, .discret a:link, .discret a:visited { color: var(--brume); }
+.discret a:hover, .discret a:focus { color: var(--laiton); }
+
+/* UN LIEN QUI EST UN BOUTON N'EST PAS UN LIEN.
+   `a:link` pèse plus lourd que `.action` dans le calcul de spécificité — un
+   élément plus une pseudo-classe contre une simple classe. La règle ci-dessus
+   écrasait donc la couleur du bouton : texte laiton sur fond laiton, illisible.
+   Seul `a:hover` le rattrapait, ce qui ne se voit qu'à la souris : au doigt,
+   sur téléphone, le bouton restait vide. Ces sélecteurs pèsent plus lourd que
+   `a:link` et rendent la lisibilité indépendante du survol. */
+a.action, a.action:link, a.action:visited { color: #16110a; text-decoration: none; }
+a.action.sobre, a.action.sobre:link, a.action.sobre:visited { color: var(--brume); }
+a.choix, a.choix:link, a.choix:visited { color: var(--brume); text-decoration: none; }
+a.retour, a.retour:link, a.retour:visited { color: var(--brume-faible); }
+/* Le survol ne change que la teinte, jamais la lisibilité : sur téléphone il
+   n'existe pas, et un état qui n'existe pas ne peut rien réparer. */
+a.action:hover, a.action:focus { color: #16110a; }
+a.action.sobre:hover, a.action.sobre:focus,
+a.choix:hover, a.choix:focus { color: var(--brume); }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -216,6 +250,34 @@ input[type="text"]:focus, textarea:focus {
   50% { content: ".."; } 75% { content: "..."; }
 }
 
+/* La quittance de la photo. Même dessin que `.alerte`, en laiton : elle
+   rassure, elle n'avertit pas. Aucune couleur n'est écrite dans un gabarit,
+   la palette est ici et seulement ici. */
+.quittance {
+  border-left: 2px solid var(--laiton);
+  background: rgba(200, 162, 74, 0.12);
+  padding: 1rem 1.15rem;
+  margin: 1.25rem 0;
+  font-size: 0.95rem;
+}
+
+.apercu-admin {
+  display: block;
+  max-width: 14rem;
+  margin: 0.5rem 0;
+  border-radius: 0.3rem;
+  border: 1px solid var(--ardoise-clair);
+}
+
+.vignette {
+  display: block;
+  width: 100%;
+  max-width: 12rem;
+  margin: 1.25rem auto 0.5rem;
+  border-radius: 0.3rem;
+  border: 1px solid var(--ardoise-clair);
+}
+
 .alerte {
   border-left: 2px solid var(--braise);
   background: rgba(178, 96, 58, 0.12);
@@ -308,3 +370,122 @@ th { font-family: var(--titre); font-weight: 400; color: var(--brume-faible); fo
   color: var(--brume-faible);
 }
 .pli > summary:focus-visible { outline: 2px solid var(--laiton); outline-offset: 2px; }
+
+/* --- Administration ------------------------------------------------------
+   Les onglets sont des LIENS : chaque écran a son adresse, donc se recharge et
+   se rouvre après une coupure. Un onglet qui vit en mémoire est perdu dès que
+   l'écran du téléphone se verrouille. */
+.onglets { display: flex; gap: 0.4rem; margin: 0 0 1.8rem; flex-wrap: wrap; }
+
+.onglet, .onglet:link, .onglet:visited {
+  padding: 0.5rem 0.95rem;
+  border-radius: 0.3rem;
+  text-decoration: none;
+  background: var(--ardoise);
+  color: var(--brume-faible);
+  border: 1px solid var(--ardoise-clair);
+  font-size: 0.95rem;
+}
+.onglet:hover, .onglet:focus { color: var(--brume); border-color: var(--laiton); }
+
+/* L'onglet actif est plein, pas seulement souligné : à luminosité baissée, un
+   soulignement ne se distingue pas d'un lien ordinaire. */
+.onglet.actif, .onglet.actif:link, .onglet.actif:visited {
+  background: var(--laiton);
+  color: #16110a;
+  border-color: var(--laiton);
+}
+
+/* Deux registres d'alerte, tirés de la palette et non inventés au gabarit.
+   La braise pour ce qui bloque ou retire, le laiton pour ce qui appelle une
+   vérification sans rien empêcher. */
+/* Les sous-onglets d'une fiche : plus discrets que la barre principale, pour
+   qu'on voie d'un coup d'œil lequel des deux niveaux on parcourt. */
+.sous-onglets { margin: 0 0 1.4rem; font-size: 0.9rem; }
+.sous-onglets .onglet { padding: 0.35rem 0.7rem; }
+
+/* Vert et rouge, mais tirés de la palette et jamais du feu tricolore : sur
+   fond nuit, un vert franc vibre et se lit mal. */
+.ajoute { color: #7fb77e; }
+.retire { color: var(--braise); text-decoration: line-through; }
+
+.entree-journal {
+  border-left: 2px solid var(--ardoise-clair);
+  padding: 0.55rem 0 0.55rem 0.9rem;
+  margin: 0 0 0.7rem;
+  font-size: 0.93rem;
+}
+
+/* Un bouton destructeur ne se confond pas avec les autres : il porte la
+   braise, la même couleur que ce qui bloque ou retire. */
+.action.peril, .action.peril:link, .action.peril:visited {
+  border-color: var(--braise);
+  color: var(--braise);
+}
+
+.alerte { color: var(--braise); }
+.vigilance { color: var(--laiton); }
+
+.grille { width: 100%; border-collapse: collapse; margin: 0 0 1.4rem; }
+.grille th, .grille td {
+  padding: 0.5rem 0.55rem;
+  text-align: left;
+  border-bottom: 1px solid var(--ardoise-clair);
+  vertical-align: middle;
+}
+.grille th {
+  font-family: var(--titre);
+  font-weight: 400;
+  color: var(--brume-faible);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.grille code, legend code {
+  font-size: 0.9rem;
+  color: var(--laiton);
+  background: var(--ardoise);
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.2rem;
+}
+
+fieldset {
+  border: 1px solid var(--ardoise-clair);
+  border-radius: 0.3rem;
+  margin: 0 0 1rem;
+  padding: 0.9rem;
+}
+fieldset legend { padding: 0 0.4rem; }
+fieldset p { margin: 0 0 0.6rem; }
+fieldset p:last-child { margin-bottom: 0; }
+
+/* Les tables se présentent en grille : dix boutons pleine largeur feraient
+   défiler l'écran deux fois, et le geste doit rester un coup d'œil. */
+.tables-choix { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+.tables-choix .choix { margin-bottom: 0; }
+@media (min-width: 30rem) {
+  .tables-choix { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* Un nom masqué par le filtre ne doit pas laisser d'espace derrière lui. */
+.choix[hidden], .groupe-table[hidden] { display: none; }
+.groupe-table .surtitre { margin: 1.4rem 0 0.5rem; }
+
+/* « Autre chose… » — le seul bouton du questionnaire qui n'enchaîne pas.
+   Identique aux autres, il serait vécu comme un bouton en panne : on le touche,
+   rien ne se passe. Le trait pointillé dit qu'il ouvre au lieu de conclure. */
+.choix.ouvre-libre {
+  background: transparent;
+  border: 1px dashed var(--ardoise-clair);
+  color: var(--brume-faible);
+  font-size: 0.95rem;
+}
+.choix.ouvre-libre.retenu {
+  border-style: solid;
+  border-color: var(--laiton);
+  color: var(--brume);
+}
+.zone-libre { margin: 0.2rem 0 0.6rem; }
+.zone-libre .exemple { margin: 0 0 0.4rem; }
+.zone-libre input[type="text"] { width: 100%; }
+.zone-libre .action { margin-top: 0.8rem; }

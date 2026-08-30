@@ -264,8 +264,9 @@ Trois règles :
 
 ## Valeurs dérivées
 
-Trois grandeurs ne sont jamais déclarées, toujours recalculées depuis ce
-qu'elles décrivent. Une valeur dérivée ne peut pas se désynchroniser :
+Une valeur dérivée ne peut pas se désynchroniser. Le tableau ci-dessous est
+volontairement sans compte : il a commencé à trois, et chaque fois qu'on a
+voulu stocker un chiffre, c'est qu'il fallait le recalculer.
 
 | Grandeur | Dérivée de | Exigence |
 |---|---|---|
@@ -274,6 +275,13 @@ qu'elles décrivent. Une valeur dérivée ne peut pas se désynchroniser :
 | `nb_generations`, `nb_tentatives` | le journal | `EX-GEN-07`, `EX-IA-21` |
 | `chronique.etage` | les clés de réponses présentes | `EX-QUE-11` |
 | le libellé d'une région | son code stable | `EX-IA-28`, `EX-IA-42` |
+| le budget de photo d'une personne | dépôts − échecs de conversion − crédits, depuis la dernière borne | `EX-PHO-37`, `EX-GEN-07` |
+| les trois budgets d'une table | les enluminures vivantes, et le journal pour les envois et suppressions | `EX-CDT-14` |
+| le rôle de Gardien | `personne.est_responsable`, moins les mariés, moins les sans-table | `EX-CDT-12` |
+| la divergence réponses / portrait | trois dates du journal comparées | `EX-QUE-11`, `EX-ADM-19` |
+| « ce Gardien s'est-il manifesté » | l'existence de sa chronique | `EX-CDT-12` |
+| les photos hors du stockage objet | le journal des copies | `EX-SAU-01` |
+| la phase de la soirée | l'absence de `lecture_seule` vaut « ouvert » | `EX-CYC-16` |
 
 Corollaire pour l'étage : comme les réponses ne sont jamais que **fusionnées**,
 jamais retirées, l'étage ne peut mécaniquement pas redescendre. Il dit ce que
@@ -594,6 +602,54 @@ devait ajouter les styles d'administration n'a donc jamais tourné — et le
 défaut ne s'est vu qu'à l'écran, deux échanges plus tard. Une commande dont la
 sortie compte se vérifie sur sa sortie, pas sur son code de retour.
 
+**Une mutation doit rester syntaxiquement valide.** Le 26 août, une mutation
+mal formée a fait tomber la suite sur une `IndentationError` : le test n'avait
+rien accusé, il avait mesuré le parseur. Le harnais contrôle désormais la
+syntaxe par `ast` **avant** de lancer.
+
+**Le motif d'une mutation doit être UNIQUE.** Vérifier qu'il existe ne suffit
+pas. Le 27 août, `if photo is None or photo.supprimee:` apparaissait deux fois :
+la mutation frappait la mauvaise, le test rendait vert, et l'on a failli en
+conclure « redondance voulue » sans avoir rien muté. Le harnais exige une
+occurrence et une seule.
+
+**Une mutation morte doit se dénoncer.** Un motif absent laisse le test passer
+et compte pour une réussite. Le harnais dit `MOTIF NON UNIQUE (0)` plutôt que
+de continuer.
+
+**Une chaîne cherchée telle quelle éprouve la mise en forme du gabarit.** Jinja
+coupe les lignes là où l'auteur les a coupées : « il vous reste 3\n
+changements » ne contient pas « 3 changements ». Replier les blancs et
+déséchapper avant de comparer, comme le fait `test_identite.texte()`. Et
+replier la casse : le titre « Quatre de plus » est capitalisé côté serveur.
+
+**Un test de route n'éprouve pas le formulaire.** Le 27 août, le champ de dépôt
+de photo de l'administrateur n'avait pas de `name` : le navigateur n'envoyait
+rien, mais les tests postaient `files={"fichier": …}` en direct et passaient.
+Trois sondes structurelles couvrent maintenant cette classe — tout champ dans
+un formulaire porte un `name`, tout `<input type="file">` sans exception, et
+toute case à cocher qui reflète un état stocké est précédée d'un champ caché de
+même nom.
+
+**Une case décochée n'est pas envoyée.** Sans champ caché avant elle, « absent »
+se lit « pas de changement » et l'on ne peut jamais décocher, seulement cocher.
+
+**Cibler la structure, pas le document.** Un découpage sur un nom échoue quand
+ce nom paraît deux fois dans la même rangée — « Ludivine » y figure comme
+prénom *et* dans « Ludivine du Val ». Viser la ligne, la balise, la classe.
+
+**La file n'est pas à soi seul.** Compter les appels à `traiter_une()` suppose
+qu'elle ne contient que ses propres tâches : faux dès qu'un bloc précédent en a
+laissé une, et le test éprouve alors le travail de quelqu'un d'autre. Vider la
+file jusqu'à ce qu'elle ne rende plus rien.
+
+**Faire écouler un délai plutôt que l'attendre.** Une temporisation réelle rend
+un test lent et intermittent — et un test intermittent finit par être ignoré.
+On avance `reprendre_apres` à la main.
+
+**Une sonde doit pouvoir accuser.** Vérifier qu'elle a bien examiné quelque
+chose : « aucun fichier fautif » sur zéro fichier examiné est vert pour rien.
+
 **Un test de traversée de chemin doit viser une cible qui existe.** « Le fichier
 `../../config.yaml` est-il refusé ? » passait grâce à l'absence de la cible, pas
 grâce au filtre. Poser un vrai classeur atteignable, et vérifier d'abord qu'il
@@ -635,6 +691,24 @@ pseudo-classe comptent dans la même colonne. Le bouton était donc correct par
 l'endroit où la règle avait été collée, pas par sa spécificité — et la mutation
 qui retirait `a.action:visited` ne cassait rien. Dépendre de l'ordre, c'est
 dépendre de l'endroit où quelqu'un posera la prochaine règle.
+
+**Un test qui interdit une chaîne la contient forcément.** Le 30 août,
+`test_maries.py` vérifiait qu'aucun fichier ne cite `mot_de_passe_maries` — et
+s'accusait lui-même. S'exclure du balayage est nécessaire, mais il faut alors
+vérifier qu'il reste quelque chose à balayer, sinon la sonde passe au vert pour
+rien.
+
+**Replier la casse avant de comparer.** Le 30 août, une assertion cherchait
+« quatre » dans une page qui affiche « Quatre de plus » : le titre est
+capitalisé côté serveur. Comparer sans replier éprouvait la mise en forme.
+
+**Choisir un sujet que la règle n'a pas déjà exclu.** Trois fois le 30 août :
+la soupape éprouvée sur quelqu'un qui avait déjà ses trois messages — le
+formulaire manquait à cause du quota, pas de la clôture ; le bouton de retrait
+éprouvé sur une table aux cinq suppressions épuisées ; la place de la soupape
+éprouvée sur le même invité saturé. Chaque fois on constatait une absence en
+croyant constater une règle. **Avant d'affirmer qu'une chose manque parce que
+la règle l'a retirée, vérifier qu'aucune autre règle ne l'avait déjà retirée.**
 
 **Une mutation qui ne fait rien tomber n'accuse pas toujours le test.** Retirer
 le contrôle de chronique existante dans `main.py` n'a rien cassé : `bd.creer()`
@@ -709,3 +783,11 @@ identique, et un échec des deux destinations serait pris pour un succès.
 | `etat_soiree` a une clé primaire entière et non un UUID (`EX-GEN-02`) | table à une seule ligne : une clé UUID n'y apporte rien et retire la garantie qui compte, qu'il n'y ait jamais deux phases simultanées. La contrainte `id = 1` le dit | accepté tel quel |
 | `EX-IA-43` est portée par un index unique partiel, mais la mise en file n'existe pas encore : `main.py` se contente de refuser si l'état est `en_cours` | vérification suivie d'écriture, donc théoriquement joueuse. La file rendra la course impossible | étape suivante |
 | `.dockerignore` est une liste d'exclusion, non d'inclusion | conforme à la lettre d'`EX-SEC-17`. Une liste d'inclusion couvrirait un nouveau type de fichier sensible, mais tout module oublié ferait échouer le démarrage — et `EX-SAU-09` gèle les déploiements le 5 septembre | accepté tel quel |
+| La CSP autorise `blob:` sur `img-src` | `EX-PHO-26` exige la préparation côté navigateur par `URL.createObjectURL`, qui produit une URL `blob:`. Sans elle l'aperçu est bloqué, et **silencieusement** : une image vide, aucun message. L'écart autorise l'AFFICHAGE d'un fichier déjà choisi par l'invité, aucune exécution. Posé sur les seules routes qui en ont besoin, et dérivé de la constante `CSP` pour que les deux ne divergent pas | accepté tel quel |
+| `table_groupe.code_responsable` est une colonne que rien n'écrit | `EX-AUTH-08` a été réécrite : le rôle se dérive de `est_responsable`, semé par l'import. Supprimer la colonne demanderait une migration à cinq jours de l'événement, pour retirer une donnée que personne ne lit | après l'événement |
+| `EX-PHO-11` — « l'original est conservé intact » se borne à l'original **tel que livré par l'appareil** | mesuré le 26 août : Safari convertit le HEIC en JPEG à l'entrée de fichier, et l'Android de galerie n'envoie aucun EXIF. Ce qu'on reçoit est déjà un réencodage. Aucune page web ne peut atteindre le fichier de la pellicule | accepté tel quel |
+| `EX-CDT-15` — « il remplace » se lit *retirer puis déposer*, sans bouton combiné | un geste unique laisserait le Gardien sans enluminure ET sans suppression si l'envoi échouait au milieu. Deux gestes coûtent la même chose et n'ont aucun état intermédiaire où l'on a perdu quelque chose | accepté tel quel |
+| `EX-MAR-06` — le lieu des mariés est assigné comme les autres, puis corrigé à la main | l'exigence veut que l'administrateur décide ; il le peut depuis la fiche, avec l'effectif de chaque région sous les yeux. Un cas particulier dans `assigner_lieu` serait une seconde règle pour deux chroniques sur quatre-vingt-treize | accepté tel quel |
+| `EX-ADM-08` — l'export imprimable se réduit au mot de passe d'accès | les dix codes de Gardien et celui des mariés n'existent plus. Le mot de passe vit dans `config.yaml` et s'écrit en clair au journal de démarrage : c'est lui qui rend la bascule vérifiable d'un coup d'œil | accepté tel quel |
+| `EX-KSK-01` à `EX-KSK-11` — le poste kiosque n'est pas installé sur place | les invités sans téléphone ne seront pas présents. Le Raspberry Pi reste à domicile et ne fait plus que tirer une archive de l'application à intervalle régulier : il devient une **troisième copie**, hors Railway et hors Cloudflare, que ni l'une ni l'autre ne fournissait | à préciser hors étape 3 |
+| Le défaut de la phase de soirée est **ouvert** | inversion assumée de la règle du défaut sûr : oublier de fermer laisse écrire des gens bornés par leurs quotas, oublier d'ouvrir laisse quatre-vingt-treize personnes devant une porte close le soir même. Le second est catastrophique, le premier bénin | accepté tel quel |

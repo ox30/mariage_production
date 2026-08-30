@@ -1,0 +1,61 @@
+{% extends "admin_base.html" %}
+{% block panneau %}
+<h1>Gestion de la soirée</h1>
+
+{% if phase == "ouvert" %}
+  <p class="quittance"><strong>Le Livre est ouvert.</strong> Les invités
+     écrivent, déposent leurs photos, et les Gardiens leurs enluminures.</p>
+{% else %}
+  <div class="alerte"><strong>Le Livre est clos.</strong> Plus aucune écriture
+     côté invité — mais chacun relit sa chronique, sa photo et ses enluminures.
+     Vous, vous gardez tous vos droits.</div>
+{% endif %}
+
+<form method="post" action="/admin/soiree">
+  {% if phase == "ouvert" %}
+    <input type="hidden" name="phase" value="lecture_seule">
+    {# Rien n'est interrompu : le verrou porte sur les écritures À VENIR, et
+       les générations déjà en file s'achèvent. C'est EX-CYC-14 satisfaite par
+       construction. Le dire ici évite d'hésiter au moment d'appuyer. #}
+    <button class="action peril" type="submit"
+            onclick="return confirm('Clore le Livre ? Les invités ne pourront plus rien écrire. Les générations déjà lancées s\'achèveront, et vous pourrez rouvrir à tout moment.')">
+      Clore le Livre</button>
+    <p class="discret">Les générations déjà lancées s'achèveront. Réversible
+       à tout moment.</p>
+  {% else %}
+    <input type="hidden" name="phase" value="ouvert">
+    <button class="action" type="submit"
+            onclick="return confirm('Rouvrir le Livre ? Les invités pourront de nouveau écrire.')">
+      Rouvrir le Livre</button>
+  {% endif %}
+</form>
+
+<p class="discret">Aucune horloge, aucun décompte : rien ne se ferme tout seul.
+   Une application qui se fermerait à 23 h pendant que quelqu'un répond serait
+   un défaut qui attend son heure — et <strong>tout ce qui n'est pas
+   explicitement clos est ouvert</strong>, donc rien à ne pas oublier
+   le 5 au matin.</p>
+
+<h2>Le Grand Chroniqueur a du courrier</h2>
+{# EX-GAL-04 — la soupape du système, pas un lot de consolation. Ce qui est
+   écrit ici demande une intervention : c'est bien une action sensible au sens
+   d'EX-GEN-05, d'où sa place au journal. #}
+{% if not messages %}
+  <p class="discret">Aucune réclamation.</p>
+{% else %}
+  <p class="discret">{{ messages | length }} message(s), le plus récent
+     d'abord. Ils se traitent <strong>après</strong> l'événement.</p>
+  {% for m in messages %}
+    <div class="entree-journal">
+      <p style="margin:0"><strong>{{ m.prenom }} {{ m.nom }}</strong>
+        <span class="discret">— {{ heure_locale(m.quand) }}
+          {% if m.sujet %} · à propos de {{ m.sujet }}{% endif %}</span>
+        {% if m.chronique %}
+          · <a href="/admin/chronique/{{ m.chronique }}?onglet=portrait">sa chronique</a>
+        {% endif %}
+      </p>
+      <p style="margin:0.3rem 0 0">{{ m.texte }}</p>
+    </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

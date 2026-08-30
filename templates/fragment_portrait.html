@@ -1,4 +1,10 @@
 {% include "fragment_bandeau_gardien.html" %}
+{% if p.nb_generations >= max_generations %}
+  {# Budget de générations épuisé : c'est ici que l'invité n'a plus de recours
+     par lui-même. #}
+  {% set sujet_message = "son portrait" %}
+  {% include "fragment_message_chroniqueur.html" %}
+{% endif %}
 {% if p.etat == "brouillon" %}
   <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
   <h1>Il reste {{ nb_bonus_mot }} questions</h1>

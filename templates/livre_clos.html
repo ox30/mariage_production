@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block titre %}Le Livre est clos{% endblock %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Le Conseil s'est retiré</p>
+  <h1>Le Livre est clos</h1>
+  <p>Les chroniques sont écrites et les pages scellées. On ne peut plus rien y
+     ajouter — mais tout ce qui s'y trouve reste lisible.</p>
+  {# 409 et non 403 : ce n'est pas un droit qui manque, c'est un moment qui est
+     passé. Et l'invité doit repartir avec un chemin, pas avec une porte. #}
+  <a class="action" href="/">Retour à l'accueil</a>
+</div>
+{% endblock %}

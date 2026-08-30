@@ -85,6 +85,8 @@
         Vous avez utilisé vos {{ budget.max_envois }} envois pour cette table.
       {% endif %}
     </p>
+    {% set sujet_message = "les enluminures de sa table" %}
+    {% include "fragment_message_chroniqueur.html" %}
   {% endif %}
 
   <div id="zone-enluminures">{% include "fragment_enluminures.html" %}</div>

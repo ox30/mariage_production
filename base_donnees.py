@@ -35,8 +35,8 @@ from sqlalchemy.orm import Session, sessionmaker
 import config
 import modeles
 import noms
-from modeles import (Appareil, Chronique, Journal, Personne, Region,
-                     TableGroupe)
+from modeles import (Appareil, Chronique, EtatSoiree, Journal, Personne,
+                     Region, TableGroupe)
 
 CHEMIN = str(config.projet().chemin_base)
 
@@ -1443,104 +1443,6 @@ CHAMPS_PERSONNE = ("prenom", "nom", "genre", "table_uuid",
                    "est_responsable", "est_marie", "active")
 
 
-def lister_personnes(avec_test: bool = False) -> list[dict]:
-    """Toutes les personnes, avec ce qu'il faut pour décider quoi en faire.
-
-    Trois renseignements dérivés, parce qu'ils commandent les gestes possibles :
-    **sa chronique** — s'il en a une, on l'édite ailleurs ; **sa table** ; et
-    **un doublon probable**, qui est le vrai cas d'usage — quelqu'un qui ne
-    s'est pas trouvé dans la liste et s'est créé une seconde fois.
-
-    Le rapprochement réutilise `_ressemble` et le seuil 0,75 éprouvés à
-    l'import (EX-AUTH-05) : un second calcul de proximité divergerait du
-    premier, et c'est celui qu'on relit le moins qui garderait l'ancien seuil.
-    """
-    with Seance() as seance:
-        requete = select(Personne)
-        if not avec_test:
-            requete = requete.where(Personne.est_test.is_(False))
-        personnes = list(seance.scalars(requete))
-        tables = {t.uuid: t for t in seance.scalars(select(TableGroupe))}
-        chroniques = {c.personne_uuid: c.uuid for c in seance.scalars(
-            select(Chronique).where(Chronique.supprimee.is_(False)))}
-
-        lues = []
-        for p in personnes:
-            table = tables.get(p.table_uuid)
-            lues.append({
-                "uuid": p.uuid, "prenom": p.prenom, "nom": p.nom or "",
-                "genre": p.genre or "", "table_uuid": p.table_uuid or "",
-                "table": None if table is None else (table.nom or table.code),
-                "est_responsable": bool(p.est_responsable),
-                "est_marie": bool(p.est_marie),
-                "active": bool(p.active), "source": p.source,
-                "est_test": bool(p.est_test),
-                "chronique": chroniques.get(p.uuid),
-                "doublons": [],
-            })
-
-        # Le doublon se cherche sur les personnes ACTIVES : une inactivée est
-        # déjà traitée, la signaler encore userait l'attention.
-        vivantes = [l for l in lues if l["active"]]
-        for i, a in enumerate(vivantes):
-            for b in vivantes[i + 1:]:
-                if _cle_floue(a["prenom"]) != _cle_floue(b["prenom"]):
-                    continue
-                # Même prénom : nom absent d'un côté, ou noms proches. C'est la
-                # règle du nom absent qui fait tout le travail (étape 2).
-                if (not a["nom"] or not b["nom"]
-                        or _ressemblent(_cle_floue(a["nom"]), _cle_floue(b["nom"]))):
-                    a["doublons"].append(b["uuid"])
-                    b["doublons"].append(a["uuid"])
-        return sorted(lues, key=lambda l: (_cle_floue(l["prenom"]),
-                                           _cle_floue(l["nom"])))
-
-
-def modifier_personne(personne_uuid: str, valeurs: dict,
-                      par: str = "admin") -> dict:
-    """Écrit les champs autorisés et journalise **ce qui a changé**.
-
-    `est_test` n'y est pas, et ce n'est pas un oubli : c'est le drapeau
-    d'étanchéité de tout le projet. Le poser sur un vrai invité le ferait
-    disparaître des listes, des totaux, de la carte et des exports — en
-    silence, et l'on ne s'en apercevrait qu'en octobre.
-    """
-    changements = {}
-    with Seance() as seance:
-        personne = seance.get(Personne, personne_uuid)
-        if personne is None:
-            return {}
-        for champ in CHAMPS_PERSONNE:
-            if champ not in valeurs:
-                continue
-            brut = valeurs[champ]
-            if champ in ("est_responsable", "est_marie", "active"):
-                nouveau = bool(brut)
-            elif champ == "table_uuid":
-                nouveau = (brut or "").strip() or None
-                if nouveau and seance.get(TableGroupe, nouveau) is None:
-                    continue
-            elif champ == "genre":
-                nouveau = (brut or "").strip() or None
-                if nouveau not in (None, "masculin", "feminin"):
-                    continue
-            else:
-                nouveau = (brut or "").strip()[:40] or None
-                if champ == "prenom" and not nouveau:
-                    continue      # un prénom vide rendrait la ligne muette
-            ancien = getattr(personne, champ)
-            if nouveau == ancien:
-                continue
-            setattr(personne, champ, nouveau)
-            changements[champ] = {"avant": ancien, "apres": nouveau}
-        if changements:
-            journaliser(seance, Journal.PERSONNE_MODIFIEE,
-                        objet_uuid=personne_uuid, objet_type="personne",
-                        pour_le_compte_de=par, details=changements)
-            seance.commit()
-    return changements
-
-
 CHAMPS_PERSONNE = ("prenom", "nom", "genre")
 
 
@@ -1659,3 +1561,138 @@ def retirer_gardien(personne_uuid: str, par: str = "admin") -> bool:
                              "anciens": [f"{personne.prenom} {personne.nom}".strip()]})
         seance.commit()
         return True
+
+
+# --------------------------------------------------------------------------- #
+# L'état de la soirée (EX-CYC réduit) et la soupape (EX-GAL-04)
+# --------------------------------------------------------------------------- #
+
+def phase_soiree() -> str:
+    """`ouvert` ou `lecture_seule`. Deux des cinq valeurs qu'admet la contrainte.
+
+    **Le défaut est OUVERT, et c'est un renversement assumé.** La règle du
+    projet veut que le défaut protège quand on oublie ; ici elle s'inverse,
+    parce que les deux oublis n'ont pas le même prix :
+
+    - oublier de fermer → les invités écrivent encore, bornés par leurs quotas.
+      Rien n'est détruit, on ferme le lendemain ;
+    - oublier d'ouvrir → quatre-vingt-treize personnes devant une application
+      qui refuse tout, le soir même.
+
+    Aucune ligne à semer, donc, et aucune bascule à ne pas oublier le 5 au
+    matin : tout ce qui n'est pas explicitement `lecture_seule` est ouvert.
+    """
+    with Seance() as seance:
+        etat = seance.get(EtatSoiree, 1)
+        return "lecture_seule" if etat is not None \
+            and etat.phase == "lecture_seule" else "ouvert"
+
+
+def livre_clos() -> bool:
+    return phase_soiree() == "lecture_seule"
+
+
+def definir_phase(phase: str, par: str = "admin") -> str:
+    """Clôt le Livre, ou le rouvre. Réversible dans les deux sens.
+
+    **N'interrompt rien.** Le verrou porte sur les écritures À VENIR ; les
+    générations déjà en file s'achèvent, le worker continue de vider la queue.
+    C'est EX-CYC-14 satisfaite par construction, sans code dédié.
+    """
+    if phase not in ("ouvert", "lecture_seule"):
+        return phase_soiree()
+    with Seance() as seance:
+        etat = seance.get(EtatSoiree, 1)
+        if etat is None:
+            etat = EtatSoiree(id=1, phase=phase)
+            seance.add(etat)
+        elif etat.phase == phase:
+            return phase
+        else:
+            etat.phase = phase
+        journaliser(seance, Journal.PHASE_CHANGEE, objet_uuid="soiree",
+                    objet_type="soiree", pour_le_compte_de=par,
+                    details={"phase": phase})
+        seance.commit()
+    return phase
+
+
+MAX_MESSAGES = 3
+
+
+def messages_de(personne_uuid: str) -> list[dict]:
+    """Les réclamations d'une personne, la plus récente en tête.
+
+    Rangées dans le JOURNAL et non dans une table à elles : il porte déjà qui,
+    quand et quoi, et une migration à cinq jours de l'événement pour trois
+    champs serait un risque pris contre un gain nul. Une réclamation EST une
+    action sensible au sens d'EX-GEN-05 — elle demande une intervention.
+    """
+    with Seance() as seance:
+        lignes = list(seance.scalars(
+            select(Journal).where(
+                Journal.acteur_personne_uuid == personne_uuid,
+                Journal.action == Journal.MESSAGE_AU_CHRONIQUEUR)
+            .order_by(Journal.horodatage.desc())))
+        messages = []
+        for ligne in lignes:
+            try:
+                details = json.loads(ligne.details_json or "{}")
+            except ValueError:
+                details = {}
+            messages.append({"quand": ligne.horodatage,
+                             "texte": details.get("texte", ""),
+                             "sujet": details.get("sujet", "")})
+        return messages
+
+
+def ecrire_au_chroniqueur(personne_uuid: str, texte: str,
+                          sujet: str = "") -> bool:
+    """EX-GAL-04 — la soupape. Enregistrée, traitée APRÈS l'événement."""
+    texte = (texte or "").strip()[:1000]
+    if not texte:
+        return False
+    if len(messages_de(personne_uuid)) >= MAX_MESSAGES:
+        return False
+    with Seance() as seance:
+        journaliser(seance, Journal.MESSAGE_AU_CHRONIQUEUR,
+                    objet_uuid=personne_uuid, objet_type="personne",
+                    acteur=personne_uuid,
+                    details={"texte": texte, "sujet": sujet[:40]})
+        seance.commit()
+        return True
+
+
+def messages_au_chroniqueur() -> list[dict]:
+    """Toutes les réclamations, la plus récente en tête, avec leur auteur.
+
+    L'administrateur ne cherche pas « les messages de Untel » : il cherche
+    **s'il y en a**, le soir, entre deux tables. La liste est donc globale, et
+    la fiche de chacun porte les siens.
+    """
+    with Seance() as seance:
+        lignes = list(seance.scalars(
+            select(Journal).where(
+                Journal.action == Journal.MESSAGE_AU_CHRONIQUEUR)
+            .order_by(Journal.horodatage.desc())))
+        messages = []
+        for ligne in lignes:
+            personne = seance.get(Personne, ligne.acteur_personne_uuid or "")
+            chronique = None
+            if personne is not None:
+                chronique = seance.scalar(
+                    select(Chronique.uuid).where(
+                        Chronique.personne_uuid == personne.uuid))
+            try:
+                details = json.loads(ligne.details_json or "{}")
+            except ValueError:
+                details = {}
+            messages.append({
+                "quand": ligne.horodatage,
+                "prenom": personne.prenom if personne else "?",
+                "nom": (personne.nom or "") if personne else "",
+                "chronique": chronique,
+                "sujet": details.get("sujet", ""),
+                "texte": details.get("texte", ""),
+            })
+        return messages

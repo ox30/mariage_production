@@ -1,0 +1,38 @@
+{# EX-GAL-04 — la soupape. Offerte SEULEMENT quand un budget est épuisé :
+   partout, elle deviendrait un champ de plus à ignorer, et c'est bien « je ne
+   peux plus rien faire moi-même » qu'elle doit soulager.
+
+   Une fois le Livre clos, le formulaire disparaît : plus d'écriture du tout,
+   et promettre qu'on tiendra compte d'un message qu'on ne peut plus envoyer
+   serait pire que de ne rien offrir. #}
+<div id="message">
+  {% if messages %}
+    {# Le message RESTE affiché : l'invité doit pouvoir vérifier qu'il est
+       parti, sans quoi il le réécrira. #}
+    <p class="quittance"><strong>Votre message est parti.</strong>
+       Le Grand Chroniqueur en tiendra compte avant d'écrire la Chronique
+       principale. Merci.</p>
+    {% for m in messages %}
+      <p class="discret" style="border-left:2px solid var(--ardoise-clair);
+         padding-left:0.8rem">« {{ m.texte }} »</p>
+    {% endfor %}
+  {% endif %}
+
+  {% if not livre_clos and messages | length < max_messages %}
+    <details>
+      <summary class="action sobre" style="display:block;text-align:center;
+        cursor:pointer">Signaler au Grand Chroniqueur</summary>
+      <form method="post" action="/message/{{ p.uuid }}" style="margin-top:0.8rem">
+        <input type="hidden" name="sujet" value="{{ sujet_message }}">
+        <p><label>Dites-lui ce qui vous manque<br>
+          <textarea name="texte" rows="4" style="width:100%"
+                    maxlength="1000" required></textarea></label></p>
+        {# La promesse est explicite sur le MOMENT : EX-GAL-04 veut que
+           l'invité sache que sa demande ne sera pas traitée sur-le-champ. #}
+        <p class="discret">Il en tiendra compte avant d'écrire la Chronique
+           principale — pas ce soir.</p>
+        <button class="action" type="submit">Envoyer</button>
+      </form>
+    </details>
+  {% endif %}
+</div>

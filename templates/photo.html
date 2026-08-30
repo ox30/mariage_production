@@ -11,7 +11,9 @@
 
   {% if budget.epuise %}
     <p>Vous avez utilisé tous vos changements. Cette photo est la vôtre.</p>
-    <a class="action" href="/fin">Continuer</a>
+    {% set sujet_message = "sa photo" %}
+    {% include "fragment_message_chroniqueur.html" %}
+    <a class="action sobre" href="/fin" style="margin-top:0.8rem">Continuer</a>
   {% else %}
     {# L'écran ne disait rien de ce qui était déjà arrivé. L'invité y revenait
        sans savoir où il en était, et le seul chiffre affiché était celui du

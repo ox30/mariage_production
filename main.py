@@ -246,6 +246,12 @@ CSP_AVEC_BLOB = CSP.replace("img-src 'self' data:",
 assert CSP_AVEC_BLOB != CSP, "la dérivation de la CSP ne mord plus sur `img-src`"
 
 
+# Les seuls POST qu'un invité garde une fois le Livre clos. `/entrer` parce
+# qu'il faut encore pouvoir franchir la porte pour RELIRE : fermer l'écriture
+# n'est pas fermer le site.
+POST_TOLERES_LIVRE_CLOS = ("/entrer",)
+
+
 @app.middleware("http")
 async def porte_et_entetes(request: Request, appel_suivant):
     chemin = request.url.path
@@ -261,6 +267,20 @@ async def porte_et_entetes(request: Request, appel_suivant):
         cible = chemin + (f"?{request.url.query}" if request.url.query else "")
         reponse = RedirectResponse(
             f"/entrer?vers={quote(cible, safe='')}", status_code=303)
+    elif (request.method == "POST"
+            and not chemin.startswith("/admin/")
+            and chemin not in POST_TOLERES_LIVRE_CLOS
+            and bd.livre_clos()):
+        # **Un seul verrou, pas onze.** Onze routes d'écriture côté invité,
+        # c'est onze endroits où oublier la douzième — et il y en aura une. La
+        # règle vit donc ici : Livre clos, tout POST qui ne va pas vers
+        # `/admin/` est refusé. Une route ajoutée demain est protégée sans
+        # qu'on y pense, et l'administrateur garde tout.
+        #
+        # Les GET passent tous : fermer l'écriture n'est pas fermer le site.
+        # Chacun relit sa chronique, sa photo, ses enluminures.
+        reponse = gabarits.TemplateResponse(
+            "livre_clos.html", {"request": request}, status_code=409)
     else:
         reponse = await appel_suivant(request)
 
@@ -935,6 +955,9 @@ def _contexte_portrait(request: Request, ligne) -> dict:
                 # une modification (EX-PHO-37). Le silence brûlait du budget.
                 "photo": photos.courante(ligne.personne_uuid),
                 "budget_photo": photos.budget(ligne.personne_uuid),
+                "messages": bd.messages_de(ligne.personne_uuid),
+                "max_messages": bd.MAX_MESSAGES,
+                "livre_clos": bd.livre_clos(),
                 **_contexte_gardien(ligne)}
     if ligne.etat in ("en_attente", "en_cours"):
         contexte["position"] = taches.position(ligne.uuid)
@@ -1148,6 +1171,9 @@ def ecran_photo(request: Request, identifiant: str):
             # futur, pas de ce qui est déjà là.
             "photo": photos.courante(ligne.personne_uuid),
             "taille_max": photos.TAILLE_MAX_OCTETS,
+            "messages": bd.messages_de(ligne.personne_uuid),
+            "max_messages": bd.MAX_MESSAGES,
+            "livre_clos": bd.livre_clos(),
             "action": f"/photo/{identifiant}",
             "suite": f"/portrait/{identifiant}",
         },
@@ -1302,6 +1328,8 @@ def ecran_enluminures(request: Request, identifiant: str,
             {"request": request, "p": ligne, "table": None,
              "sans_table": bd.est_gardien_sans_table(ligne.personne_uuid),
              "budget": None, "enluminures": [], "refus": "",
+             "messages": [], "max_messages": bd.MAX_MESSAGES,
+             "livre_clos": bd.livre_clos(),
              "taille_max": photos.TAILLE_MAX_OCTETS},
             status_code=403)
     reponse = gabarits.TemplateResponse(
@@ -1312,6 +1340,9 @@ def ecran_enluminures(request: Request, identifiant: str,
             "enluminures": photos.enluminures(table.uuid),
             "taille_max": photos.TAILLE_MAX_OCTETS,
             "refus": refus,
+            "messages": bd.messages_de(ligne.personne_uuid),
+            "max_messages": bd.MAX_MESSAGES,
+            "livre_clos": bd.livre_clos(),
         },
     )
     reponse.headers["Content-Security-Policy"] = CSP_AVEC_BLOB
@@ -1841,6 +1872,7 @@ def _fiche(ligne, onglet: str = "portrait") -> dict:
         "codes_lieux": CODES_LIEUX,
         "peuples": CONFIG.get("peuples", []),
         "divergent": bd.reponses_divergentes(ligne.uuid),
+        "messages": bd.messages_de(ligne.personne_uuid),
         # Le lieu découpe les dix chapitres : le déplacer déséquilibre la
         # répartition. L'effectif est montré À CÔTÉ du champ, sinon la
         # conséquence ne se découvre qu'en octobre.
@@ -1853,59 +1885,39 @@ def _fiche(ligne, onglet: str = "portrait") -> dict:
     }
 
 
-@app.get("/admin/personnes", response_class=HTMLResponse)
-def admin_personnes(request: Request, test: str = "", filtre: str = "",
-                    _: str = Depends(admin)):
-    """L'administration du personnel : qui est invité, où, et avec quel rôle.
-
-    Séparée des chroniques, et c'est délibéré : ce sont deux objets à deux
-    moments. Avant la soirée on règle les noms, les tables et les Gardiens ;
-    pendant et après, on relit les textes et les photos. Quatre-vingt-treize
-    lignes contre soixante-dix, avec des colonnes qui ne se recouvrent pas.
-
-    Le lien entre les deux est fort dans les deux sens — c'est ce qui remplace
-    la fusion.
-    """
-    sur_le_test = test == "oui"
-    lignes = [p for p in bd.lister_personnes(avec_test=True)
-              if p["est_test"] == sur_le_test]
-    # Quatre-vingt-treize lignes sur un téléphone à 21 h, sans filtre, c'est
-    # une liste qu'on ne lit pas.
-    if filtre == "doublons":
-        lignes = [p for p in lignes if p["doublons"]]
-    elif filtre == "libre":
-        lignes = [p for p in lignes if p["source"] == "saisie_libre"]
-    elif filtre == "sans_table":
-        lignes = [p for p in lignes if not p["table_uuid"]]
-    elif filtre == "inactifs":
-        lignes = [p for p in lignes if not p["active"]]
-    elif filtre == "sans_chronique":
-        lignes = [p for p in lignes if p["active"] and not p["chronique"]]
+@app.get("/admin/soiree", response_class=HTMLResponse)
+def admin_soiree(request: Request, _: str = Depends(admin)):
     return gabarits.TemplateResponse(
-        "admin_personnes.html",
-        {"request": request, "lignes": lignes, "filtre": filtre,
-         "sur_le_test": sur_le_test, "mode_test": bd.mode_test_actif(),
-         "tables": bd.tables(avec_test=True),
-         "total": len([p for p in bd.lister_personnes(avec_test=True)
-                       if p["est_test"] == sur_le_test])})
+        "admin_soiree.html",
+        {"request": request, "phase": bd.phase_soiree(),
+         "mode_test": bd.mode_test_actif(),
+         "messages": bd.messages_au_chroniqueur()})
 
 
-@app.post("/admin/personnes/{personne_uuid}")
-async def admin_modifier_personne(request: Request, personne_uuid: str,
-                                  _: str = Depends(admin)):
-    donnees = dict(await request.form())
-    # Les cases non cochées n'arrivent pas : leur absence VAUT « faux », et
-    # c'est pour ça qu'un champ caché les accompagne dans le gabarit. Sans lui,
-    # décocher n'aurait aucun effet.
-    valeurs = {c: donnees.get(c) for c in bd.CHAMPS_PERSONNE
-               if c in donnees or f"_{c}" in donnees}
-    for drapeau in ("est_responsable", "est_marie", "active"):
-        if f"_{drapeau}" in donnees:
-            valeurs[drapeau] = donnees.get(drapeau) is not None
-    bd.modifier_personne(personne_uuid, valeurs)
-    suite = (donnees.get("retour") or "/admin/personnes").strip()
-    return RedirectResponse(suite if suite.startswith("/admin/") else
-                            "/admin/personnes", status_code=303)
+@app.post("/admin/soiree")
+async def admin_definir_phase(request: Request, _: str = Depends(admin)):
+    donnees = await request.form()
+    bd.definir_phase((donnees.get("phase") or "").strip())
+    return RedirectResponse("/admin/soiree", status_code=303)
+
+
+@app.post("/message/{identifiant}")
+async def ecrire_au_chroniqueur(request: Request, identifiant: str):
+    """EX-GAL-04 — la soupape. Enregistrée, traitée APRÈS l'événement.
+
+    Le formulaire n'est offert qu'une fois un budget épuisé : partout, il
+    deviendrait un champ de plus à ignorer. La route, elle, ne le vérifie pas
+    — refuser un message parce qu'il reste une génération serait absurde.
+
+    Une fois le Livre clos, elle est refusée comme tout le reste : c'est le
+    verrou du middleware, pas un contrôle de plus à écrire ici.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    donnees = await request.form()
+    bd.ecrire_au_chroniqueur(ligne.personne_uuid,
+                             donnees.get("texte") or "",
+                             donnees.get("sujet") or "")
+    return RedirectResponse(f"/portrait/{identifiant}#message", status_code=303)
 
 
 @app.get("/admin/veille", response_class=HTMLResponse)

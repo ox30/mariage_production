@@ -467,6 +467,12 @@ class Journal(_CleUUID, Base):
     # ailleurs qu'à l'import, et on voudra savoir en octobre qui l'a déplacée.
     GARDIEN_DESIGNE = "gardien_designe"
     PERSONNE_MODIFIEE = "personne_modifiee"
+    PHASE_CHANGEE = "phase_changee"
+    # EX-GAL-04 — la soupape du système. Rangée au journal plutôt que dans une
+    # table à elle : il porte déjà qui, quand et quoi, et une migration à cinq
+    # jours de l'événement pour trois champs serait un risque pris contre un
+    # gain nul.
+    MESSAGE_AU_CHRONIQUEUR = "message_au_chroniqueur"
     CHRONIQUE_SUPPRIMEE = "chronique_supprimee"
     CHRONIQUE_RESTAUREE = "chronique_restauree"
     # Actions écrites en chaîne libre depuis les étapes 1 et 2, promues en
@@ -475,7 +481,6 @@ class Journal(_CleUUID, Base):
     # recopiées à la main diverge du jour où l'on renomme une action.
     REPONSES_REPRISES = "reponses_reprises"
     PERSONNE_CREEE = "personne_creee"
-    PERSONNE_MODIFIEE = "personne_modifiee"
     NOM_COMPLETE = "nom_complete"
     IMPORT_INVITES = "import_invites"
     REGION_MODIFIEE = "region_modifiee"

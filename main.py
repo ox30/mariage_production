@@ -1240,7 +1240,8 @@ def annonce_gardien_avant(request: Request, personne_uuid: str):
 
 
 @app.get("/enluminures/{identifiant}", response_class=HTMLResponse)
-def ecran_enluminures(request: Request, identifiant: str):
+def ecran_enluminures(request: Request, identifiant: str,
+                      refus: str = ""):
     """EX-CDT-13 — l'écran de capture du Gardien, et de lui seul.
 
     EX-CDT-16 : aucun droit sur les objets d'autrui. L'adresse porte l'UUID de
@@ -1256,7 +1257,7 @@ def ecran_enluminures(request: Request, identifiant: str):
             "enluminures.html",
             {"request": request, "p": ligne, "table": None,
              "sans_table": bd.est_gardien_sans_table(ligne.personne_uuid),
-             "budget": None, "enluminures": [],
+             "budget": None, "enluminures": [], "refus": "",
              "taille_max": photos.TAILLE_MAX_OCTETS},
             status_code=403)
     reponse = gabarits.TemplateResponse(
@@ -1266,6 +1267,7 @@ def ecran_enluminures(request: Request, identifiant: str):
             "budget": photos.budget_table(table.uuid),
             "enluminures": photos.enluminures(table.uuid),
             "taille_max": photos.TAILLE_MAX_OCTETS,
+            "refus": refus,
         },
     )
     reponse.headers["Content-Security-Policy"] = CSP_AVEC_BLOB
@@ -1290,7 +1292,9 @@ async def deposer_enluminure(identifiant: str,
 
 
 @app.get("/enluminure/{identifiant}/{photo_uuid}")
-def vignette_enluminure(identifiant: str, photo_uuid: str):
+@app.get("/enluminure/{identifiant}/{photo_uuid}/{variante}")
+def vignette_enluminure(identifiant: str, photo_uuid: str,
+                        variante: str = "vignettes"):
     """Une enluminure de SA table, servie depuis le volume.
 
     Deux contrôles, pas un : le rôle **et** l'appartenance de la photo à la
@@ -1299,24 +1303,61 @@ def vignette_enluminure(identifiant: str, photo_uuid: str):
     les objets d'autrui, et une table n'est pas moins « autrui » qu'une
     personne.
     """
+    # Liste close AVANT tout usage : concaténée telle quelle, « ../../.. »
+    # sortirait du dossier des médias. Le nom du fichier, lui, vient de la base.
+    if variante not in ("vignettes", "web"):
+        raise HTTPException(status_code=404, detail="Variante inconnue")
     ligne = _chronique_ou_404(identifiant)
     table = bd.table_gardee(ligne.personne_uuid)
     if table is None:
         raise HTTPException(status_code=403, detail="Vous n'êtes pas Gardien")
     with bd.Seance() as seance:
         photo = seance.get(modeles.Photo, photo_uuid)
-        relatif = photo.chemin_vignette if photo is not None else None
+        relatif = None if photo is None else (
+            photo.chemin_vignette if variante == "vignettes"
+            else photo.chemin_web)
         appartient = (photo is not None and photo.portee == "table"
                       and photo.table_uuid == table.uuid
                       and not photo.supprimee)
     if not appartient or not relatif:
         raise HTTPException(status_code=404, detail="Aucune enluminure")
-    chemin = (config.projet().dossier_medias / "photos_invites" / "vignettes"
+    chemin = (config.projet().dossier_medias / "photos_invites" / variante
               / relatif)
     if not chemin.is_file():
         raise HTTPException(status_code=404, detail="Aucune enluminure")
     return FileResponse(chemin, media_type="image/jpeg",
                         headers=EN_TETES_PHOTO)
+
+
+@app.post("/enluminures/{identifiant}/retirer")
+async def retirer_enluminure(request: Request, identifiant: str):
+    """EX-CDT-15 — il retire une enluminure pour en remettre une autre.
+
+    **Pas de bouton « remplacer » qui ferait les deux d'un coup.** Retirer puis
+    déposer coûte exactement la même chose, mais un geste combiné laisserait le
+    Gardien sans enluminure ET sans suppression si l'envoi échouait au milieu.
+    Deux gestes, aucun état intermédiaire où l'on a perdu quelque chose.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    table = bd.table_gardee(ligne.personne_uuid)
+    if table is None:
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas Gardien")
+    donnees = await request.form()
+    photo_uuid = (donnees.get("photo") or "").strip()
+    with bd.Seance() as seance:
+        photo = seance.get(modeles.Photo, photo_uuid)
+        # Deux contrôles : le rôle ET l'appartenance. Une table n'est pas moins
+        # « autrui » qu'une personne (EX-CDT-16).
+        sienne = (photo is not None and photo.portee == "table"
+                  and photo.table_uuid == table.uuid and not photo.supprimee)
+        gratuite = sienne and photo.etat == "echouee"
+    if not sienne:
+        raise HTTPException(status_code=404, detail="Aucune enluminure")
+    if not gratuite and not photos.budget_table(table.uuid).peut_supprimer:
+        return RedirectResponse(f"/enluminures/{identifiant}?refus=suppressions",
+                                status_code=303)
+    photos.retirer(photo_uuid)
+    return RedirectResponse(f"/enluminures/{identifiant}", status_code=303)
 
 
 @app.get("/gardien/{identifiant}", response_class=HTMLResponse)

@@ -584,10 +584,24 @@ def retirer(photo_uuid: str, par: str | None = None) -> bool:
             return False
         photo.supprimee = True
         photo.supprimee_le = config.maintenant()
-        bd.journaliser(seance, Journal.PHOTO_RETIREE, objet_uuid=photo_uuid,
-                       objet_type="photo", acteur=photo.personne_uuid,
-                       pour_le_compte_de=par,
-                       details={"etat_au_retrait": photo.etat})
+        # Le retrait se journalise sur le sujet du BUDGET, pas sur celui qui
+        # agit : une enluminure retirée et comptée sur la personne laisserait
+        # le compteur de la table à zéro, et les cinq suppressions ne
+        # fermeraient jamais. Même piège que le crédit d'échec.
+        if photo.portee == "table" and photo.table_uuid:
+            gratuit = photo.etat == "echouee"
+            bd.journaliser(
+                seance,
+                Journal.ENLUMINURE_ECARTEE if gratuit
+                else Journal.ENLUMINURE_RETIREE,
+                objet_uuid=photo.table_uuid, objet_type="table",
+                acteur=photo.personne_uuid, pour_le_compte_de=par,
+                details={"photo": photo_uuid, "etat_au_retrait": photo.etat})
+        else:
+            bd.journaliser(seance, Journal.PHOTO_RETIREE, objet_uuid=photo_uuid,
+                           objet_type="photo", acteur=photo.personne_uuid,
+                           pour_le_compte_de=par,
+                           details={"etat_au_retrait": photo.etat})
         seance.commit()
         return True
 

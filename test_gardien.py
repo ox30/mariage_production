@@ -351,3 +351,140 @@ sans_cookie = test_outils.client(main.app)
 assert sans_cookie.get("/fin").status_code == 200
 
 print("TOUT PASSE — la fin renvoie à l'accueil, et rappelle sa charge au Gardien")
+
+
+# --- D2 : la galerie — agrandir, retirer, et le compteur qui ferme ------- #
+
+# La table est à cinq enluminures depuis le bloc précédent : le dépôt est
+# fermé, et c'est justement l'état où la galerie sert.
+budget = photos.budget_table(table_a)
+assert budget.affichees == 5 and budget.peut_deposer is False
+
+galerie = client.get(f"/enluminures/{gardien.uuid}").text
+vivantes = photos.enluminures(table_a)
+assert len(vivantes) == 5
+
+# Chaque vignette mène à la version large — un lien, pas une visionneuse :
+# rien à charger, rien à casser sur vingt téléphones différents.
+for e in vivantes:
+    if e.chemin_vignette:
+        assert f'/enluminure/{gardien.uuid}/{e.uuid}/web?v=' in galerie, e.uuid
+
+grande = next(e for e in vivantes if e.chemin_web)
+web = config.projet().dossier_medias / "photos_invites" / "web" / grande.chemin_web
+assert web.is_file()
+servie = client.get(f"/enluminure/{gardien.uuid}/{grande.uuid}/web")
+assert servie.status_code == 200 and servie.content == web.read_bytes()
+# La vignette reste servie par l'adresse sans variante : D1 ne se casse pas.
+assert client.get(
+    f"/enluminure/{gardien.uuid}/{grande.uuid}").status_code == 200
+
+# `variante` est comparée à une liste close AVANT tout usage — la cible de
+# traversée existe, sinon le test passerait grâce à son absence.
+assert (config.projet().dossier / "app.db").is_file()
+for variante in ("..", "../..", "originaux", "vignettes/../../.."):
+    reponse = client.get(f"/enluminure/{gardien.uuid}/{grande.uuid}/{variante}")
+    assert reponse.status_code in (404, 400), (variante, reponse.status_code)
+
+print("TOUT PASSE — chaque vignette mène à sa version large, et rien d'autre")
+
+
+# --- retirer libère une place, et coûte une suppression ------------------ #
+
+avant = photos.budget_table(table_a)
+retrait = client.post(f"/enluminures/{gardien.uuid}/retirer",
+                      data={"photo": vivantes[0].uuid}, follow_redirects=False)
+assert retrait.status_code == 303
+apres = photos.budget_table(table_a)
+assert avant.affichees - apres.affichees == 1
+assert apres.suppressions - avant.suppressions == 1
+# EX-GEN-03 — suppression douce : la ligne se marque, le fichier reste.
+with bd.Seance() as seance:
+    ligne_photo = seance.get(Photo, vivantes[0].uuid)
+    assert ligne_photo.supprimee is True and ligne_photo.supprimee_le is not None
+assert (config.projet().dossier_medias / "photos_invites" / "originaux"
+        / vivantes[0].chemin_original).is_file()
+
+# Le bouton EST offert tant qu'il reste des suppressions : éprouver seulement
+# sa disparition laisserait passer un gabarit qui ne l'affiche jamais.
+page = client.get(f"/enluminures/{gardien.uuid}").text
+assert photos.budget_table(table_a).peut_supprimer
+for e in photos.enluminures(table_a):
+    assert f'value="{e.uuid}"' in page, e.uuid
+assert page.count(f'action="/enluminures/{gardien.uuid}/retirer"') == \
+    len(photos.enluminures(table_a))
+
+# La place libérée rouvre le dépôt — c'est ça, « remplacer ».
+assert photos.budget_table(table_a).peut_deposer is True
+assert "boîte à capturer les dessins" in _texte(
+    client.get(f"/enluminures/{gardien.uuid}").text)
+
+# EX-CDT-16 — le Gardien d'une autre table ne retire rien ici.
+assert client.post(f"/enluminures/{autre_gardien.uuid}/retirer",
+                   data={"photo": vivantes[1].uuid}).status_code == 404
+assert client.post(f"/enluminures/{ordinaire.uuid}/retirer",
+                   data={"photo": vivantes[1].uuid}).status_code == 403
+assert photos.budget_table(table_a).affichees == 4
+
+print("TOUT PASSE — retirer libère une place et coûte une suppression")
+
+
+# --- écarter un échec est gratuit ---------------------------------------- #
+
+# Cinq suppressions, c'est peu : en brûler à nettoyer NOS pannes serait payer
+# deux fois. Le crédit d'envoi a déjà été rendu à la conversion.
+rate = client.post(f"/enluminures/{gardien.uuid}",
+                   files={"fichier": ("k.png",
+                                      b"\x89PNG\r\n\x1a\n" + b"zut" * 60,
+                                      "image/png")}).json()["photo"]
+_ = [taches.traiter_une() for _ in range(6)]
+with bd.Seance() as seance:
+    assert seance.get(Photo, rate).etat == "echouee"
+
+reference = photos.budget_table(table_a).suppressions
+client.post(f"/enluminures/{gardien.uuid}/retirer", data={"photo": rate})
+assert photos.budget_table(table_a).suppressions == reference, \
+    "écarter un échec de conversion a coûté une suppression"
+with bd.Seance() as seance:
+    assert seance.get(Photo, rate).supprimee is True
+    trace = seance.scalar(select(Journal).where(
+        Journal.objet_uuid == table_a,
+        Journal.action == Journal.ENLUMINURE_ECARTEE))
+assert trace is not None, "l'écartement n'est pas tracé"
+
+print("TOUT PASSE — écarter une enluminure en échec ne coûte rien")
+
+
+# --- après cinq suppressions, la table est figée ------------------------- #
+
+while photos.budget_table(table_a).affichees < 5:
+    assert client.post(f"/enluminures/{gardien.uuid}",
+                       files={"fichier": ("e.jpg", _img(), "image/jpeg")}
+                       ).status_code == 200
+
+while photos.budget_table(table_a).peut_supprimer:
+    vivante = photos.enluminures(table_a)[0]
+    client.post(f"/enluminures/{gardien.uuid}/retirer",
+                data={"photo": vivante.uuid})
+    while photos.budget_table(table_a).affichees < 5 \
+            and photos.budget_table(table_a).peut_deposer:
+        client.post(f"/enluminures/{gardien.uuid}",
+                    files={"fichier": ("e.jpg", _img(), "image/jpeg")})
+
+budget = photos.budget_table(table_a)
+assert budget.suppressions == budget.max_suppressions, budget
+restante = photos.enluminures(table_a)[0]
+
+# Le bouton disparaît, ET la route refuse : le bouton absent ne suffit pas.
+page = client.get(f"/enluminures/{gardien.uuid}").text
+assert f'value="{restante.uuid}"' not in page, "le bouton Retirer est encore offert"
+bloque = client.post(f"/enluminures/{gardien.uuid}/retirer",
+                     data={"photo": restante.uuid}, follow_redirects=False)
+assert bloque.headers["location"].endswith("?refus=suppressions")
+assert photos.budget_table(table_a).suppressions == budget.max_suppressions
+
+# Et l'écran dit pourquoi, plutôt que de rester muet.
+assert "utilisé vos 5 suppressions" in _texte(
+    client.get(f"/enluminures/{gardien.uuid}?refus=suppressions").text)
+
+print("TOUT PASSE — cinq suppressions figent la table, et l'écran le dit")

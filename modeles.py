@@ -457,6 +457,12 @@ class Journal(_CleUUID, Base):
     ENLUMINURE_RETIREE = "enluminure_retiree"
     ENLUMINURE_ECHOUEE = "enluminure_echouee"
     ENLUMINURE_CREDITEE = "enluminure_creditee"
+    # Retirer une enluminure dont la CONVERSION a échoué est gratuit, comme
+    # pour une photo personnelle (EX-PHO-33) : c'est notre défaut. Une action
+    # distincte plutôt qu'un détail à relire — le budget se compte alors sans
+    # jamais ouvrir un JSON. Cinq suppressions, c'est peu : en brûler deux à
+    # nettoyer nos propres échecs serait payer notre panne.
+    ENLUMINURE_ECARTEE = "enluminure_ecartee"
     CHRONIQUE_SUPPRIMEE = "chronique_supprimee"
     CHRONIQUE_RESTAUREE = "chronique_restauree"
     # Actions écrites en chaîne libre depuis les étapes 1 et 2, promues en

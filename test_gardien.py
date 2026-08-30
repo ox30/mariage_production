@@ -292,3 +292,62 @@ assert "5 sur 5" in plein and "Le compte y est" in plein
 assert "boîte à capturer les dessins" not in plein
 
 print("TOUT PASSE — cinq affichées ferment le dépôt, et l'écran le dit")
+
+
+# --- l'accueil porte toutes les portes ouvertes -------------------------- #
+
+# *Constaté en production le 30 août :* un Gardien qui avait fini son parcours
+# revenait à l'accueil et n'y trouvait que « Retrouver mon personnage ». Aucune
+# porte vers ses enluminures — il quittait le site et n'y revenait pas.
+
+def _reconnaitre(chronique):
+    """Pose le cookie d'appareil, comme le fait le choix d'identité."""
+    with bd.Seance() as seance:
+        personne_uuid = seance.get(Chronique, chronique.uuid).personne_uuid
+    reponse = client.post("/identite/choisir",
+                          data={"personne_uuid": personne_uuid,
+                                "intention": "revoir"},
+                          follow_redirects=False)
+    assert reponse.status_code in (200, 303), reponse.status_code
+
+
+_reconnaitre(gardien)
+menu = client.get("/").text
+assert f'href="/portrait/{gardien.uuid}"' in menu
+assert f'href="/photo/{gardien.uuid}"' in menu, "la photo n'a pas de porte"
+assert f'href="/enluminures/{gardien.uuid}"' in menu, \
+    "le Gardien n'a aucune porte vers ses enluminures depuis l'accueil"
+assert "Andúril" in _texte(menu)
+
+# L'invité ordinaire a ses deux portes, pas la troisième.
+_reconnaitre(ordinaire)
+menu = client.get("/").text
+assert f'href="/photo/{ordinaire.uuid}"' in menu
+assert "/enluminures/" not in menu, "un invité ordinaire se voit offrir les enluminures"
+
+print("TOUT PASSE — l'accueil porte la chronique, la photo et les enluminures")
+
+
+# --- la fin du parcours n'est pas la fin de la soirée -------------------- #
+
+# « Recommencer avec quelqu'un d'autre » venait du kiosque, où l'on passe
+# l'appareil au suivant. Sur son propre téléphone, la phrase invite à partir.
+_reconnaitre(gardien)
+fin = client.get("/fin").text
+lu = _texte(fin)
+assert "Recommencer avec quelqu'un d'autre" not in lu
+assert "Retour à l'accueil" in lu
+assert f'href="/enluminures/{gardien.uuid}"' in fin, \
+    "le Gardien quitte la soirée sans porte vers sa charge"
+assert "Gardien" in lu and "Andúril" in lu
+
+_reconnaitre(ordinaire)
+fin_ordinaire = client.get("/fin").text
+assert "Retour à l'accueil" in _texte(fin_ordinaire)
+assert "/enluminures/" not in fin_ordinaire
+
+# Sans appareil reconnu, la page tient quand même — elle est publique.
+sans_cookie = test_outils.client(main.app)
+assert sans_cookie.get("/fin").status_code == 200
+
+print("TOUT PASSE — la fin renvoie à l'accueil, et rappelle sa charge au Gardien")

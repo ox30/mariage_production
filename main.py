@@ -663,9 +663,20 @@ def accueil(request: Request):
     personne = bd.personne_de_l_appareil(identite.du_requete(request))
     if personne is not None:
         chronique = bd.chronique_de_personne(personne.uuid)
+        # L'accueil EST le point de ralliement : c'est le seul écran qu'on
+        # retrouve toujours, et il reconnaît l'appareil. Il doit donc porter
+        # TOUTES les portes ouvertes à cette personne. Sans cela, le Gardien
+        # qui a fini son parcours quitte le site et n'y revient pas.
+        table = bd.table_gardee(personne.uuid)
         if chronique:
-            reprise = {"prenom": personne.prenom,
-                       "lien": f"/portrait/{chronique}"}
+            reprise = {"prenom": personne.prenom, "chronique": chronique,
+                       "lien": f"/portrait/{chronique}", "table_gardee": table}
+        elif table is not None:
+            # Gardien reconnu mais sans chronique : les enluminures s'adressent
+            # par sa chronique, qui n'existe pas encore. Le dire, plutôt que
+            # d'offrir un lien qui rendrait 404.
+            reprise = {"prenom": personne.prenom, "chronique": None,
+                       "lien": None, "table_gardee": table}
     return gabarits.TemplateResponse("accueil.html",
                                      {"request": request, "reprise": reprise})
 
@@ -1327,7 +1338,20 @@ def annonce_gardien(request: Request, identifiant: str):
 
 @app.get("/fin", response_class=HTMLResponse)
 def fin(request: Request):
-    return gabarits.TemplateResponse("fin.html", {"request": request})
+    """La fin du parcours n'est pas la fin de la soirée.
+
+    « Recommencer avec quelqu'un d'autre » venait du kiosque, où l'on passe
+    l'appareil au suivant. Sur son propre téléphone, la phrase invite à partir
+    — et le Gardien qui part n'a plus de porte vers ses enluminures.
+    """
+    personne = bd.personne_de_l_appareil(identite.du_requete(request))
+    chronique = None if personne is None else bd.chronique_de_personne(
+        personne.uuid)
+    return gabarits.TemplateResponse(
+        "fin.html",
+        {"request": request, "chronique_uuid": chronique,
+         "table_gardee": None if personne is None
+         else bd.table_gardee(personne.uuid)})
 
 
 # --------------------------------------------------------------------------- #

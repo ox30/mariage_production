@@ -14,7 +14,27 @@
      retours refont la saisie de leur nom pour arriver là où le téléphone
      savait déjà les mener. #}
   {% if reprise %}
-    <a class="action" href="{{ reprise.lien }}">Retrouver mon personnage</a>
+    {% if reprise.lien %}
+      <a class="action" href="{{ reprise.lien }}">Retrouver mon personnage</a>
+      <a class="action sobre" href="/photo/{{ reprise.chronique }}"
+         style="margin-top:0.6rem">Votre photo</a>
+    {% endif %}
+    {# Le Gardien a une porte de plus, et elle doit être ICI : c'est le seul
+       écran qu'il retrouvera après avoir fermé le sien. #}
+    {% if reprise.table_gardee %}
+      {% if reprise.chronique %}
+        {# Le nom de la table plutôt que « votre table » : c'est plus court à
+           lire et ça confirme au passage qu'on a bien reconnu la bonne. #}
+        <a class="action sobre" href="/enluminures/{{ reprise.chronique }}"
+           style="margin-top:0.6rem">Les enluminures de la table
+          {{ reprise.table_gardee.nom or reprise.table_gardee.code }}</a>
+      {% else %}
+        <a class="action" href="/identite?intention=creer">Créer mon personnage</a>
+        <p class="discret" style="margin-top:0.6rem">Vous êtes le Gardien de la
+           table {{ reprise.table_gardee.nom or reprise.table_gardee.code }} :
+           écrivez d'abord votre chronique, les enluminures viendront ensuite.</p>
+      {% endif %}
+    {% endif %}
     <p class="discret" style="margin-top:0.6rem;text-align:center">
       Ce téléphone est celui de {{ reprise.prenom }}.
       <a href="/identite?intention=creer">Ce n'est pas vous&nbsp;?</a>

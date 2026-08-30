@@ -6,6 +6,19 @@
   <h1>Votre nom est inscrit</h1>
   <p>Les mariés recevront la carte plus tard, et devront deviner qui se cache
      derrière chaque chronique. Ne leur dites rien.</p>
-  <p class="discret"><a href="/">Recommencer avec quelqu'un d'autre</a></p>
+  {# Le Gardien ne doit pas partir d'ici : c'est le dernier écran de son
+     parcours d'invité, et sa charge, elle, commence maintenant. #}
+  {% if table_gardee and chronique_uuid %}
+    <hr>
+    <p>Il vous reste une charge : vous êtes le <strong>Gardien</strong> de la
+       table {{ table_gardee.nom or table_gardee.code }}. Cinq enluminures se
+       sont perdues entre les pages du Livre.</p>
+    <a class="action" href="/enluminures/{{ chronique_uuid }}">Retrouver les
+      enluminures</a>
+  {% endif %}
+  {# « Recommencer avec quelqu'un d'autre » venait du kiosque. Sur son propre
+     téléphone, la phrase invite à partir. #}
+  <p class="discret" style="margin-top:1.2rem;text-align:center">
+    <a href="/">Retour à l'accueil</a></p>
 </div>
 {% endblock %}

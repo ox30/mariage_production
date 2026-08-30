@@ -296,7 +296,8 @@ def deposer(personne_uuid: str, octets: bytes, est_test: bool = False,
             etat_table = _budget_table(seance, table_uuid)
             if not etat_table.peut_deposer and not sans_consommer:
                 raise RefusPhoto(
-                    "Votre table a ses cinq enluminures."
+                    f"Votre table a ses {etat_table.max_affichees} "
+                    "enluminures."
                     if etat_table.affichees >= etat_table.max_affichees
                     else "Vous avez utilisé vos dix envois pour cette table.")
         else:
@@ -742,3 +743,25 @@ def reprendre_copies_manquantes() -> int:
     for identifiant in manquantes:
         taches.mettre_en_file("copie_stockage_objet", identifiant)
     return len(manquantes)
+
+
+def crediter_table(table_uuid: str, tout: bool = True,
+                   par: str = "admin") -> BudgetTable:
+    """Rend les envois et les suppressions d'une table (EX-ADM-10).
+
+    **Ne fait pas disparaître les enluminures en place** : `affichees` est un
+    comptage de lignes vivantes, pas une somme du journal. Rendre les crédits
+    rouvre donc les *envois* et les *suppressions* — et c'est bien la seconde
+    qui débloque, puisqu'à cinq affichées il faut retirer pour ajouter.
+
+    Une borne datée, comme pour les photos personnelles : deux appuis en posent
+    deux, la dernière gagne, le résultat est le même. Des lignes de
+    compensation, elles, s'additionneraient.
+    """
+    with bd.Seance() as seance:
+        bd.journaliser(seance, Journal.ENLUMINURE_CREDITEE,
+                       objet_uuid=table_uuid, objet_type="table",
+                       pour_le_compte_de=par,
+                       details={"portee": "tout" if tout else "un"})
+        seance.commit()
+    return budget_table(table_uuid)

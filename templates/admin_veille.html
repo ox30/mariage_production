@@ -47,7 +47,22 @@
       {# Le compte est dérivé, jamais stocké : il se recompte à chaque
          affichage plutôt que de dépendre d'une colonne à tenir à jour. #}
       <td class="{{ 'alerte' if t.enluminures == 0 else '' }}">
-        {{ t.enluminures }} / {{ max_enluminures }}</td>
+        {{ t.enluminures }} / {{ max_enluminures }}
+        {% set b = budgets[t.uuid] %}
+        <br><span class="discret">{{ b.envois }}/{{ b.max_envois }} envois ·
+          {{ b.suppressions }}/{{ b.max_suppressions }} suppr.</span>
+        {% if b.envois or b.suppressions %}
+          {# Rend les envois et les suppressions ; ne fait PAS disparaître les
+             enluminures en place. C'est la seconde qui débloque, puisqu'à
+             cinq affichées il faut retirer pour ajouter. #}
+          <form method="post" action="/admin/veille/crediter">
+            <input type="hidden" name="table" value="{{ t.uuid }}">
+            <button class="action sobre" type="submit"
+                    onclick="return confirm('Rendre à la table {{ t.nom or t.code }} tous ses envois et toutes ses suppressions ? Les enluminures déjà en place ne bougent pas.')">
+              Rendre ses crédits</button>
+          </form>
+        {% endif %}
+      </td>
       <td>
         {% if t.membres %}
           <form method="post" action="/admin/veille/designer">

@@ -153,7 +153,8 @@ assert saut.status_code == 303
 assert saut.headers["location"] == f"/gardien/{gardien.uuid}", saut.headers
 
 rappel = _texte(client.get(f"/gardien/{gardien.uuid}").text)
-assert "Cinq enluminures" in rappel and "Andúril" in rappel
+assert "enluminures se sont perdues" in rappel and "Andúril" in rappel
+assert main.en_lettres(5).capitalize() + " enluminures" in rappel
 
 print("TOUT PASSE — page d'annonce, bandeau permanent, rappel après validation")
 
@@ -283,7 +284,8 @@ assert budget.restantes == 0
 sixieme = client.post(f"/enluminures/{gardien.uuid}",
                       files={"fichier": ("e.jpg", _img(), "image/jpeg")})
 assert sixieme.status_code == 422
-assert "cinq enluminures" in sixieme.json()["refus"]
+assert f"{budget.max_affichees} enluminures" in sixieme.json()["refus"], \
+    sixieme.json()["refus"]
 assert photos.budget_table(table_a).affichees == 5
 
 # L'écran le dit, plutôt que d'offrir un bouton qui refusera.
@@ -686,3 +688,71 @@ assert f'value="{seule.personne_uuid}"' not in bloc, \
     "un marié est proposé comme Gardien"
 
 print("TOUT PASSE — la charge se déplace, se journalise, et évite les mariés")
+
+
+# --- le nombre d'enluminures se règle, et les textes suivent ------------- #
+
+# `quotas.photos_de_table` vit dans `config.yaml`, relu à chaud. Un texte qui
+# écrirait « cinq » en dur mentirait dès qu'on passe à huit : le nombre et la
+# phrase doivent venir du même endroit.
+import config as _config
+
+_vrai_parametre = _config.parametre
+_config.parametre = lambda chemin, defaut=None: (
+    8 if chemin == "quotas.photos_de_table" else _vrai_parametre(chemin, defaut))
+try:
+    assert photos.budget_table(table_c).max_affichees == 8
+    annonce = _texte(client.get(f"/gardien/{veilleur.uuid}").text)
+    assert "Huit enluminures" in annonce, annonce[:300]
+    assert "Cinq" not in annonce
+    _reconnaitre(veilleur)
+    assert "Huit enluminures" in _texte(client.get("/fin").text)
+    ecran = _texte(client.get(f"/enluminures/{veilleur.uuid}").text)
+    assert "sur 8" in ecran
+finally:
+    _config.parametre = _vrai_parametre
+
+assert photos.budget_table(table_c).max_affichees == 5
+assert "Cinq enluminures" in _texte(client.get(f"/gardien/{veilleur.uuid}").text)
+
+print("TOUT PASSE — le quota se règle, et les textes le suivent")
+
+
+# --- l'administrateur rend ses crédits à une table ----------------------- #
+
+# Le blocage réel : la table a ses cinq enluminures ET ses cinq suppressions.
+# Elle est figée. Rendre les crédits rouvre les suppressions — c'est elles qui
+# débloquent, puisqu'à cinq affichées il faut retirer pour ajouter.
+fige = photos.budget_table(table_a)
+assert fige.affichees == fige.max_affichees
+assert fige.peut_supprimer is False and fige.peut_deposer is False
+
+assert client.post("/admin/veille/crediter",
+                   data={"table": table_a}).status_code == 401
+client.post("/admin/veille/crediter", auth=ADMIN, data={"table": table_a})
+
+rendu = photos.budget_table(table_a)
+assert rendu.suppressions == 0 and rendu.envois == 0
+assert rendu.peut_supprimer is True
+# Les enluminures en place ne bougent pas : `affichees` compte des lignes
+# vivantes, pas des lignes de journal.
+assert rendu.affichees == fige.affichees
+assert rendu.peut_deposer is False          # toujours cinq affichées
+
+# Et le Gardien peut de nouveau retirer, donc remplacer.
+vivante = photos.enluminures(table_a)[0]
+client.post(f"/enluminures/{gardien.uuid}/retirer", data={"photo": vivante.uuid})
+assert photos.budget_table(table_a).peut_deposer is True
+
+# Idempotent : la remise est une DATE, pas une quantité. Trois appuis valent un.
+for _ in range(3):
+    client.post("/admin/veille/crediter", auth=ADMIN, data={"table": table_a})
+apres = photos.budget_table(table_a)
+assert apres.suppressions == 0 and apres.envois == 0
+
+# Le bouton est offert là où il sert, et l'écran dit les deux compteurs.
+page = client.get("/admin/veille", auth=ADMIN).text
+assert 'action="/admin/veille/crediter"' in page
+assert "envois" in _texte(page) and "suppr." in _texte(page)
+
+print("TOUT PASSE — les crédits d'une table se rendent, et c'est idempotent")

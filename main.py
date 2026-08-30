@@ -351,6 +351,21 @@ def heure_locale(instant) -> str:
 
 gabarits.env.globals["heure_locale"] = heure_locale
 
+
+def en_lettres(nombre: int) -> str:
+    """Un petit nombre en toutes lettres, pour les textes du parcours.
+
+    Le quota se règle dans `config.yaml`, relu à chaud : un texte qui écrirait
+    « cinq » en dur mentirait dès qu'on passe à huit. Le nombre et la phrase
+    doivent venir du même endroit.
+    """
+    return _EN_LETTRES.get(nombre, str(nombre))
+
+
+gabarits.env.globals["en_lettres"] = en_lettres
+gabarits.env.globals["quota_enluminures"] = lambda: int(
+    config.parametre("quotas.photos_de_table", 5))
+
 # Sans marqueur de version, un navigateur qui a déjà chargé la feuille de style
 # la réutilise : une correction d'affichage faite à 22 h resterait invisible
 # pour tous ceux qui ont ouvert la page plus tôt — c'est-à-dire pour tout le
@@ -1808,7 +1823,9 @@ def admin_veille(request: Request, _: str = Depends(admin)):
         "admin_veille.html",
         {"request": request, "veille": bd.veille_des_tables(),
          "mode_test": bd.mode_test_actif(),
-         "max_enluminures": int(config.parametre("quotas.photos_de_table", 5))})
+         "max_enluminures": int(config.parametre("quotas.photos_de_table", 5)),
+         "budgets": {t["uuid"]: photos.budget_table(t["uuid"])
+                     for t in bd.veille_des_tables()}})
 
 
 @app.post("/admin/veille/designer")
@@ -1816,6 +1833,16 @@ async def admin_designer_gardien(request: Request, _: str = Depends(admin)):
     donnees = await request.form()
     bd.designer_gardien((donnees.get("table") or "").strip(),
                         (donnees.get("personne") or "").strip())
+    return RedirectResponse("/admin/veille", status_code=303)
+
+
+@app.post("/admin/veille/crediter")
+async def admin_crediter_table(request: Request, _: str = Depends(admin)):
+    """Rouvre les envois et les suppressions d'une table."""
+    donnees = await request.form()
+    table_uuid = (donnees.get("table") or "").strip()
+    if table_uuid:
+        photos.crediter_table(table_uuid)
     return RedirectResponse("/admin/veille", status_code=303)
 
 

@@ -11,8 +11,9 @@
   {% if table_gardee and chronique_uuid %}
     <hr>
     <p>Il vous reste une charge : vous êtes le <strong>Gardien</strong> de la
-       table {{ table_gardee.nom or table_gardee.code }}. Cinq enluminures se
-       sont perdues entre les pages du Livre.</p>
+       table {{ table_gardee.nom or table_gardee.code }}.
+       {{ en_lettres(quota_enluminures())|capitalize }} enluminures se sont
+       perdues entre les pages du Livre.</p>
     <a class="action" href="/enluminures/{{ chronique_uuid }}">Retrouver les
       enluminures</a>
   {% endif %}

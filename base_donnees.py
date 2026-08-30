@@ -1359,3 +1359,81 @@ def est_gardien_sans_table(personne_uuid: str) -> bool:
         personne = seance.get(Personne, personne_uuid)
         return bool(personne is not None and personne.est_responsable
                     and not personne.est_marie and not personne.table_uuid)
+
+
+def veille_des_tables() -> list[dict]:
+    """Pour chaque table : son Gardien, s'il s'est manifesté, ses enluminures.
+
+    C'est l'écran du soir. La question à 21 h 30 n'est pas « combien
+    d'enluminures au total » mais **quelle table n'en a pas et pourquoi** —
+    faute de Gardien désigné, ou parce que celui qui l'est n'a jamais ouvert
+    l'application. Les deux se soignent différemment, donc les deux se
+    distinguent ici.
+
+    Tout est dérivé, rien n'est stocké : « s'est manifesté » se lit à
+    l'existence d'une chronique, et non à une colonne qu'il faudrait tenir à
+    jour.
+    """
+    from modeles import Photo
+
+    veille = []
+    with Seance() as seance:
+        for table in seance.scalars(
+                select(TableGroupe).where(TableGroupe.est_test.is_(False))):
+            membres = list(seance.scalars(
+                select(Personne).where(Personne.table_uuid == table.uuid,
+                                       Personne.active.is_(True))))
+            # Le rôle se dérive des trois mêmes conditions que `table_gardee` :
+            # un second calcul divergerait de lui au premier changement.
+            gardiens = [m for m in membres
+                        if m.est_responsable and not m.est_marie]
+            enluminures = seance.scalar(
+                select(func.count()).select_from(Photo)
+                .where(Photo.table_uuid == table.uuid,
+                       Photo.portee == "table",
+                       Photo.supprimee.is_(False))) or 0
+            venus = {m.uuid for m in membres if seance.scalar(
+                select(func.count()).select_from(Chronique)
+                .where(Chronique.personne_uuid == m.uuid,
+                       Chronique.supprimee.is_(False)))}
+            veille.append({
+                "uuid": table.uuid, "code": table.code, "nom": table.nom,
+                "effectif": len(membres),
+                "gardiens": [{"uuid": m.uuid, "prenom": m.prenom,
+                              "nom": m.nom, "venu": m.uuid in venus}
+                             for m in gardiens],
+                "membres": [{"uuid": m.uuid, "prenom": m.prenom, "nom": m.nom,
+                             "venu": m.uuid in venus,
+                             "est_marie": bool(m.est_marie)} for m in membres],
+                "enluminures": enluminures,
+            })
+    return sorted(veille, key=lambda t: (len(t["code"]), t["code"]))
+
+
+def designer_gardien(table_uuid: str, personne_uuid: str,
+                     par: str = "admin") -> bool:
+    """Déplace la charge, et ne l'ajoute jamais à côté d'une autre.
+
+    Une table à deux Gardiens n'est pas une table mieux gardée : c'est une
+    table où chacun croit que l'autre s'en occupe. La désignation retire donc
+    le drapeau aux autres membres avant de le poser.
+    """
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None or personne.table_uuid != table_uuid:
+            return False
+        anciens = []
+        for membre in seance.scalars(
+                select(Personne).where(Personne.table_uuid == table_uuid,
+                                       Personne.est_responsable.is_(True))):
+            if membre.uuid != personne_uuid:
+                membre.est_responsable = False
+                anciens.append(f"{membre.prenom} {membre.nom}".strip())
+        personne.est_responsable = True
+        journaliser(seance, Journal.GARDIEN_DESIGNE, objet_uuid=table_uuid,
+                    objet_type="table", acteur=personne_uuid,
+                    pour_le_compte_de=par,
+                    details={"nouveau": f"{personne.prenom} {personne.nom}".strip(),
+                             "anciens": anciens})
+        seance.commit()
+        return True

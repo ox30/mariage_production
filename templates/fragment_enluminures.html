@@ -22,7 +22,7 @@
              téléphones différents. `?v=` parce que sans empreinte l'URL ne
              change pas d'une image à l'autre et le navigateur rend la
              précédente. #}
-          <a href="/enluminure/{{ p.uuid }}/{{ e.uuid }}/web?v={{ e.uuid[:12] }}">
+          <a href="/enluminures/{{ p.uuid }}/voir/{{ e.uuid }}">
             <img src="/enluminure/{{ p.uuid }}/{{ e.uuid }}?v={{ e.uuid[:12] }}"
                  alt="Enluminure — toucher pour l'agrandir"></a>
         {% elif e.etat == "traitement" %}

@@ -1,0 +1,77 @@
+{% extends "admin_base.html" %}
+{% block panneau %}
+<h1>La veille des tables</h1>
+<p class="discret">La question du soir n'est pas « combien d'enluminures » mais
+   <strong>quelle table n'en a pas, et pourquoi</strong>. Deux causes, deux
+   remèdes : personne n'est désigné, ou celui qui l'est n'a jamais ouvert
+   l'application.</p>
+
+{% set orphelines = veille | rejectattr("gardiens") | list %}
+{% set absents = veille | selectattr("gardiens") | rejectattr("gardiens.0.venu") | list %}
+
+{% if orphelines %}
+  <div class="alerte"><strong>{{ orphelines | length }} table(s) sans
+     Gardien.</strong> Désignez quelqu'un ci-dessous — la charge se déplace,
+     elle ne s'ajoute pas.</div>
+{% endif %}
+{% if absents %}
+  <p class="vigilance">{{ absents | length }} Gardien(s) désigné(s) n'ont pas
+     encore ouvert le Livre. Allez leur parler : le drapeau ne suffit pas.</p>
+{% endif %}
+{% if not orphelines and not absents %}
+  <p class="quittance">Chaque table a son Gardien, et tous se sont manifestés.</p>
+{% endif %}
+
+<table class="grille">
+  <thead><tr>
+    <th>Table</th><th>Gardien</th><th>Enluminures</th><th>Désigner</th>
+  </tr></thead>
+  <tbody>
+  {% for t in veille %}
+    <tr>
+      <td><code>{{ t.code }}</code> {{ t.nom or "—" }}
+        <br><span class="discret">{{ t.effectif }} invité(s)</span></td>
+      <td>
+        {% if not t.gardiens %}
+          <span class="alerte">aucun</span>
+        {% else %}
+          {% for g in t.gardiens %}
+            {{ g.prenom }} {{ g.nom }}
+            {% if g.venu %}<br><span class="discret">a ouvert le Livre</span>
+            {% else %}<br><span class="vigilance">ne s'est pas manifesté</span>
+            {% endif %}
+            {% if not loop.last %}<hr>{% endif %}
+          {% endfor %}
+        {% endif %}
+      </td>
+      {# Le compte est dérivé, jamais stocké : il se recompte à chaque
+         affichage plutôt que de dépendre d'une colonne à tenir à jour. #}
+      <td class="{{ 'alerte' if t.enluminures == 0 else '' }}">
+        {{ t.enluminures }} / {{ max_enluminures }}</td>
+      <td>
+        {% if t.membres %}
+          <form method="post" action="/admin/veille/designer">
+            <input type="hidden" name="table" value="{{ t.uuid }}">
+            <select name="personne">
+              {% for m in t.membres %}
+                {# Un marié n'est jamais Gardien : il se marie ce soir-là, et
+                   sa table finirait à zéro sans que personne s'en aperçoive.
+                   Ne pas l'offrir vaut mieux que le refuser après coup. #}
+                {% if not m.est_marie %}
+                  <option value="{{ m.uuid }}">{{ m.prenom }} {{ m.nom }}{% if not m.venu %} — absent{% endif %}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+            <button class="action sobre" type="submit"
+                    onclick="return confirm('Confier la garde de la table {{ t.nom or t.code }} à cette personne ? La charge sera retirée à qui la portait.')">
+              Désigner</button>
+          </form>
+        {% else %}
+          <span class="discret">aucun invité à cette table</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

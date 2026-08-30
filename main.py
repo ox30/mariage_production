@@ -1358,6 +1358,39 @@ def vignette_enluminure(identifiant: str, photo_uuid: str,
                         headers=EN_TETES_PHOTO)
 
 
+@app.get("/enluminures/{identifiant}/voir/{photo_uuid}",
+         response_class=HTMLResponse)
+def voir_enluminure(request: Request, identifiant: str, photo_uuid: str):
+    """L'enluminure en grand, dans une PAGE et non en fichier nu.
+
+    Un lien vers l'image seule laissait le navigateur afficher un JPEG sans
+    rien autour : le seul retour était le bouton précédent, et sur un téléphone
+    à 21 h c'est déjà trop demander. Une page porte son propre chemin de
+    retour, et tant qu'à l'ouvrir, le retrait s'y trouve aussi — c'est là qu'on
+    décide, en la regardant.
+
+    Le segment `voir` est là pour que l'adresse ne puisse pas être confondue
+    avec `/etat` ou `/retirer` : dépendre de l'ordre de déclaration des routes,
+    c'est dépendre de l'endroit où quelqu'un posera la suivante.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    table = bd.table_gardee(ligne.personne_uuid)
+    if table is None:
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas Gardien")
+    with bd.Seance() as seance:
+        photo = seance.get(modeles.Photo, photo_uuid)
+        sienne = (photo is not None and photo.portee == "table"
+                  and photo.table_uuid == table.uuid and not photo.supprimee)
+        etat = None if photo is None else photo.etat
+    if not sienne:
+        raise HTTPException(status_code=404, detail="Aucune enluminure")
+    return gabarits.TemplateResponse(
+        "enluminure_grande.html",
+        {"request": request, "p": ligne, "table": table,
+         "photo_uuid": photo_uuid, "etat": etat,
+         "budget": photos.budget_table(table.uuid)})
+
+
 @app.post("/enluminures/{identifiant}/retirer")
 async def retirer_enluminure(request: Request, identifiant: str):
     """EX-CDT-15 — il retire une enluminure pour en remettre une autre.
@@ -1761,6 +1794,29 @@ def _fiche(ligne, onglet: str = "portrait") -> dict:
         "journal": _journal_de(ligne) if onglet == "historique" else [],
         "ecarts": _ecarts_depuis_le_portrait(ligne) if onglet == "controle" else [],
     }
+
+
+@app.get("/admin/veille", response_class=HTMLResponse)
+def admin_veille(request: Request, _: str = Depends(admin)):
+    """L'écran du soir : quelle table n'a pas de Gardien, et pourquoi.
+
+    Deux causes, deux remèdes : personne n'est désigné, ou celui qui l'est n'a
+    jamais ouvert l'application. La première se règle ici même ; la seconde se
+    règle en allant lui parler — encore faut-il savoir à qui.
+    """
+    return gabarits.TemplateResponse(
+        "admin_veille.html",
+        {"request": request, "veille": bd.veille_des_tables(),
+         "mode_test": bd.mode_test_actif(),
+         "max_enluminures": int(config.parametre("quotas.photos_de_table", 5))})
+
+
+@app.post("/admin/veille/designer")
+async def admin_designer_gardien(request: Request, _: str = Depends(admin)):
+    donnees = await request.form()
+    bd.designer_gardien((donnees.get("table") or "").strip(),
+                        (donnees.get("personne") or "").strip())
+    return RedirectResponse("/admin/veille", status_code=303)
 
 
 @app.get("/admin/chroniques", response_class=HTMLResponse)

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block titre %}Une enluminure{% endblock %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Table {{ table.nom or table.code }}</p>
+
+  {# `?v=` : sans empreinte, l'adresse ne change pas d'une image à l'autre et
+     le navigateur rend la précédente. #}
+  <img src="/enluminure/{{ p.uuid }}/{{ photo_uuid }}/web?v={{ photo_uuid[:12] }}"
+       alt="Enluminure" style="width:100%;border-radius:0.3rem;display:block">
+
+  {# Le retour est un LIEN, pas le bouton précédent du navigateur : sur un
+     téléphone à 21 h, on ne cherche pas une flèche système. #}
+  <p style="margin-top:1.2rem">
+    <a class="action" href="/enluminures/{{ p.uuid }}">Retour à la galerie</a>
+  </p>
+
+  {# Tant qu'à la regarder en grand, c'est ici qu'on décide de la garder. #}
+  {% if etat == "echouee" or budget.peut_supprimer %}
+    <form method="post" action="/enluminures/{{ p.uuid }}/retirer">
+      <input type="hidden" name="photo" value="{{ photo_uuid }}">
+      <button class="action sobre" type="submit"
+              onclick="return confirm('Retirer cette enluminure ?{% if etat != "echouee" %} Il vous restera {{ budget.max_suppressions - budget.suppressions - 1 }} suppression(s).{% endif %}')">
+        {% if etat == "echouee" %}Écarter{% else %}Retirer cette enluminure{% endif %}
+      </button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

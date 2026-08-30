@@ -364,11 +364,12 @@ galerie = client.get(f"/enluminures/{gardien.uuid}").text
 vivantes = photos.enluminures(table_a)
 assert len(vivantes) == 5
 
-# Chaque vignette mène à la version large — un lien, pas une visionneuse :
-# rien à charger, rien à casser sur vingt téléphones différents.
+# Chaque vignette mène à une PAGE portant l'image en grand — pas au fichier
+# nu : celui-ci n'offrait aucun retour, sinon le bouton précédent du
+# navigateur. *Constaté en production le 30 août.*
 for e in vivantes:
     if e.chemin_vignette:
-        assert f'/enluminure/{gardien.uuid}/{e.uuid}/web?v=' in galerie, e.uuid
+        assert f'href="/enluminures/{gardien.uuid}/voir/{e.uuid}"' in galerie, e.uuid
 
 grande = next(e for e in vivantes if e.chemin_web)
 web = config.projet().dossier_medias / "photos_invites" / "web" / grande.chemin_web
@@ -529,7 +530,10 @@ _ = [taches.traiter_une() for _ in range(6)]
 prete = client.get(f"/enluminures/{veilleur.uuid}").text
 grille = prete.split('id="zone-enluminures"')[1]
 assert "hx-get" not in grille, "le sondage continue sur une grille finie"
-assert "/web?v=" in grille, "l'image n'apparaît pas une fois prête"
+assert "/vignette" not in grille  # ce n'est pas la route des photos perso
+assert f'src="/enluminure/{veilleur.uuid}/' in grille, \
+    "l'image n'apparaît pas une fois prête"
+assert f'href="/enluminures/{veilleur.uuid}/voir/' in grille
 assert "Le Conseil la prépare" not in _texte(grille)
 
 print("TOUT PASSE — la grille se rafraîchit seule, et s'arrête quand c'est prêt")
@@ -560,3 +564,125 @@ assert "hx-get" not in zone.split("</div>")[0], "le sondage continue sur une pho
 assert f'src="/photo/{veilleur.uuid}/vignette?v=' in zone
 
 print("TOUT PASSE — la quittance de la photo personnelle se rafraîchit aussi")
+
+
+# --- l'enluminure en grand porte son propre retour ----------------------- #
+
+# *Constaté en production le 30 août :* la vignette menait au fichier nu. Le
+# navigateur affichait un JPEG sans rien autour, et le seul retour était le
+# bouton précédent — sur un téléphone à 21 h, c'est déjà trop demander.
+
+vue = photos.enluminures(table_c)[0]
+assert photos.budget_table(table_c).peut_supprimer
+grande_page = client.get(f"/enluminures/{veilleur.uuid}/voir/{vue.uuid}")
+assert grande_page.status_code == 200
+page = grande_page.text
+assert f'/enluminure/{veilleur.uuid}/{vue.uuid}/web?v=' in page
+assert f'href="/enluminures/{veilleur.uuid}"' in page, \
+    "aucun retour vers la galerie"
+assert "Retour à la galerie" in _texte(page)
+# Tant qu'à la regarder en grand, c'est là qu'on décide de la garder.
+assert f'value="{vue.uuid}"' in page and "/retirer" in page
+
+# Le segment « voir » évite toute confusion avec `/etat` et `/retirer` :
+# dépendre de l'ordre de déclaration des routes, c'est dépendre de l'endroit où
+# quelqu'un posera la suivante.
+assert client.get(f"/enluminures/{veilleur.uuid}/etat").status_code == 200
+assert client.post(f"/enluminures/{veilleur.uuid}/retirer",
+                   data={"photo": "inexistant"}).status_code == 404
+
+# EX-CDT-16 — même clôture que partout : le rôle, puis l'appartenance.
+assert client.get(
+    f"/enluminures/{ordinaire.uuid}/voir/{vue.uuid}").status_code == 403
+assert client.get(
+    f"/enluminures/{autre_gardien.uuid}/voir/{vue.uuid}").status_code == 404
+
+print("TOUT PASSE — l'enluminure en grand porte son retour et son retrait")
+
+
+# --- D3 : la veille des tables ------------------------------------------- #
+
+# L'écran du soir. La question à 21 h 30 n'est pas « combien d'enluminures »
+# mais QUELLE table n'en a pas, et POURQUOI : personne n'est désigné, ou celui
+# qui l'est n'a jamais ouvert l'application. Deux causes, deux remèdes.
+
+assert client.get("/admin/veille").status_code == 401
+veille = client.get("/admin/veille", auth=ADMIN)
+assert veille.status_code == 200
+lu = _texte(veille.text)
+assert 'href="/admin/veille"' in client.get("/admin/invites", auth=ADMIN).text
+
+lignes = {t["code"]: t for t in bd.veille_des_tables()}
+assert lignes["3"]["gardiens"][0]["prenom"] == "Alaric"
+assert lignes["3"]["gardiens"][0]["venu"] is True
+assert lignes["3"]["enluminures"] == photos.budget_table(table_a).affichees
+
+# Une table sans Gardien se voit, et se distingue d'un Gardien absent.
+table_d = _table("6", "Fondcombe")
+seule = _invite("Gaultier", table_d)                    # pas responsable
+veille = _texte(client.get("/admin/veille", auth=ADMIN).text)
+assert "1 table(s) sans Gardien" in veille, veille[-500:]
+assert "Fondcombe" in veille
+
+# Un Gardien désigné qui n'a pas ouvert le Livre est signalé à part : ça ne se
+# soigne pas en désignant quelqu'un d'autre, ça se soigne en allant lui parler.
+with bd.Seance() as seance:
+    absent = Personne(prenom="Hilaire", nom="Muet", genre="masculin",
+                      table_uuid=table_d, est_responsable=True, source="import")
+    seance.add(absent)
+    seance.commit()
+    absent_uuid = absent.uuid
+veille = _texte(client.get("/admin/veille", auth=ADMIN).text)
+assert "sans Gardien" not in veille
+assert "ne s'est pas manifesté" in veille
+assert bd.veille_des_tables()
+assert next(t for t in bd.veille_des_tables()
+            if t["code"] == "6")["gardiens"][0]["venu"] is False
+
+print("TOUT PASSE — la veille distingue « aucun Gardien » de « Gardien absent »")
+
+
+# --- désigner déplace la charge, ne la double jamais --------------------- #
+
+# Une table à deux Gardiens n'est pas mieux gardée : c'est une table où chacun
+# croit que l'autre s'en occupe.
+with bd.Seance() as seance:
+    seance.get(Personne, seule.personne_uuid)
+reponse = client.post("/admin/veille/designer", auth=ADMIN,
+                      data={"table": table_d, "personne": seule.personne_uuid},
+                      follow_redirects=False)
+assert reponse.status_code == 303
+
+apres = next(t for t in bd.veille_des_tables() if t["code"] == "6")
+assert len(apres["gardiens"]) == 1, apres["gardiens"]
+assert apres["gardiens"][0]["prenom"] == "Gaultier"
+with bd.Seance() as seance:
+    assert seance.get(Personne, absent_uuid).est_responsable is False
+
+# Le rôle suit immédiatement : c'est la même dérivation, pas un second calcul.
+assert bd.table_gardee(seule.personne_uuid).uuid == table_d
+assert bd.table_gardee(absent_uuid) is None
+assert client.get(f"/enluminures/{seule.uuid}").status_code == 200
+
+# Journalisé : on voudra savoir en octobre qui a déplacé la charge.
+with bd.Seance() as seance:
+    trace = seance.scalar(select(Journal).where(
+        Journal.objet_uuid == table_d,
+        Journal.action == Journal.GARDIEN_DESIGNE))
+assert trace is not None and "Muet" in trace.details_json
+
+# On ne désigne pas quelqu'un d'une autre table.
+assert bd.designer_gardien(table_d, gardien.personne_uuid) is False
+assert bd.table_gardee(gardien.personne_uuid).uuid == table_a
+
+# Et un marié n'est jamais offert : il se marie ce soir-là, sa table finirait à
+# zéro sans que personne s'en aperçoive.
+with bd.Seance() as seance:
+    seance.get(Personne, seule.personne_uuid).est_marie = True
+    seance.commit()
+choix = client.get("/admin/veille", auth=ADMIN).text
+bloc = choix.split(f'value="{table_d}"')[1].split("</select>")[0]
+assert f'value="{seule.personne_uuid}"' not in bloc, \
+    "un marié est proposé comme Gardien"
+
+print("TOUT PASSE — la charge se déplace, se journalise, et évite les mariés")

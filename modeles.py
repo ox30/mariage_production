@@ -463,6 +463,9 @@ class Journal(_CleUUID, Base):
     # jamais ouvrir un JSON. Cinq suppressions, c'est peu : en brûler deux à
     # nettoyer nos propres échecs serait payer notre panne.
     ENLUMINURE_ECARTEE = "enluminure_ecartee"
+    # La charge change de main : c'est la seule écriture qui touche au rôle
+    # ailleurs qu'à l'import, et on voudra savoir en octobre qui l'a déplacée.
+    GARDIEN_DESIGNE = "gardien_designe"
     CHRONIQUE_SUPPRIMEE = "chronique_supprimee"
     CHRONIQUE_RESTAUREE = "chronique_restauree"
     # Actions écrites en chaîne libre depuis les étapes 1 et 2, promues en

@@ -1437,3 +1437,225 @@ def designer_gardien(table_uuid: str, personne_uuid: str,
                              "anciens": anciens})
         seance.commit()
         return True
+
+
+CHAMPS_PERSONNE = ("prenom", "nom", "genre", "table_uuid",
+                   "est_responsable", "est_marie", "active")
+
+
+def lister_personnes(avec_test: bool = False) -> list[dict]:
+    """Toutes les personnes, avec ce qu'il faut pour décider quoi en faire.
+
+    Trois renseignements dérivés, parce qu'ils commandent les gestes possibles :
+    **sa chronique** — s'il en a une, on l'édite ailleurs ; **sa table** ; et
+    **un doublon probable**, qui est le vrai cas d'usage — quelqu'un qui ne
+    s'est pas trouvé dans la liste et s'est créé une seconde fois.
+
+    Le rapprochement réutilise `_ressemble` et le seuil 0,75 éprouvés à
+    l'import (EX-AUTH-05) : un second calcul de proximité divergerait du
+    premier, et c'est celui qu'on relit le moins qui garderait l'ancien seuil.
+    """
+    with Seance() as seance:
+        requete = select(Personne)
+        if not avec_test:
+            requete = requete.where(Personne.est_test.is_(False))
+        personnes = list(seance.scalars(requete))
+        tables = {t.uuid: t for t in seance.scalars(select(TableGroupe))}
+        chroniques = {c.personne_uuid: c.uuid for c in seance.scalars(
+            select(Chronique).where(Chronique.supprimee.is_(False)))}
+
+        lues = []
+        for p in personnes:
+            table = tables.get(p.table_uuid)
+            lues.append({
+                "uuid": p.uuid, "prenom": p.prenom, "nom": p.nom or "",
+                "genre": p.genre or "", "table_uuid": p.table_uuid or "",
+                "table": None if table is None else (table.nom or table.code),
+                "est_responsable": bool(p.est_responsable),
+                "est_marie": bool(p.est_marie),
+                "active": bool(p.active), "source": p.source,
+                "est_test": bool(p.est_test),
+                "chronique": chroniques.get(p.uuid),
+                "doublons": [],
+            })
+
+        # Le doublon se cherche sur les personnes ACTIVES : une inactivée est
+        # déjà traitée, la signaler encore userait l'attention.
+        vivantes = [l for l in lues if l["active"]]
+        for i, a in enumerate(vivantes):
+            for b in vivantes[i + 1:]:
+                if _cle_floue(a["prenom"]) != _cle_floue(b["prenom"]):
+                    continue
+                # Même prénom : nom absent d'un côté, ou noms proches. C'est la
+                # règle du nom absent qui fait tout le travail (étape 2).
+                if (not a["nom"] or not b["nom"]
+                        or _ressemblent(_cle_floue(a["nom"]), _cle_floue(b["nom"]))):
+                    a["doublons"].append(b["uuid"])
+                    b["doublons"].append(a["uuid"])
+        return sorted(lues, key=lambda l: (_cle_floue(l["prenom"]),
+                                           _cle_floue(l["nom"])))
+
+
+def modifier_personne(personne_uuid: str, valeurs: dict,
+                      par: str = "admin") -> dict:
+    """Écrit les champs autorisés et journalise **ce qui a changé**.
+
+    `est_test` n'y est pas, et ce n'est pas un oubli : c'est le drapeau
+    d'étanchéité de tout le projet. Le poser sur un vrai invité le ferait
+    disparaître des listes, des totaux, de la carte et des exports — en
+    silence, et l'on ne s'en apercevrait qu'en octobre.
+    """
+    changements = {}
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None:
+            return {}
+        for champ in CHAMPS_PERSONNE:
+            if champ not in valeurs:
+                continue
+            brut = valeurs[champ]
+            if champ in ("est_responsable", "est_marie", "active"):
+                nouveau = bool(brut)
+            elif champ == "table_uuid":
+                nouveau = (brut or "").strip() or None
+                if nouveau and seance.get(TableGroupe, nouveau) is None:
+                    continue
+            elif champ == "genre":
+                nouveau = (brut or "").strip() or None
+                if nouveau not in (None, "masculin", "feminin"):
+                    continue
+            else:
+                nouveau = (brut or "").strip()[:40] or None
+                if champ == "prenom" and not nouveau:
+                    continue      # un prénom vide rendrait la ligne muette
+            ancien = getattr(personne, champ)
+            if nouveau == ancien:
+                continue
+            setattr(personne, champ, nouveau)
+            changements[champ] = {"avant": ancien, "apres": nouveau}
+        if changements:
+            journaliser(seance, Journal.PERSONNE_MODIFIEE,
+                        objet_uuid=personne_uuid, objet_type="personne",
+                        pour_le_compte_de=par, details=changements)
+            seance.commit()
+    return changements
+
+
+CHAMPS_PERSONNE = ("prenom", "nom", "genre")
+
+
+def personnes_toutes() -> list[dict]:
+    """Toutes les personnes, actives ou non, avec leur chronique s'il y en a.
+
+    L'onglet Invités existe pour ce que la liste des chroniques ne montre
+    pas : **une personne sans chronique y est invisible**. C'est précisément le
+    cas d'une saisie libre accidentelle, qu'aucun écran ne trahissait jusqu'ici.
+    """
+    with Seance() as seance:
+        tables = {t.uuid: t for t in seance.scalars(select(TableGroupe))}
+        lignes = []
+        for personne in seance.scalars(select(Personne)):
+            chronique = seance.scalar(
+                select(Chronique).where(
+                    Chronique.personne_uuid == personne.uuid))
+            table = tables.get(personne.table_uuid)
+            lignes.append({
+                "uuid": personne.uuid, "prenom": personne.prenom,
+                "nom": personne.nom or "", "genre": personne.genre or "",
+                "table_uuid": personne.table_uuid or "",
+                "table": (table.nom or table.code) if table else "",
+                "table_code": table.code if table else "",
+                "est_responsable": bool(personne.est_responsable),
+                "est_marie": bool(personne.est_marie),
+                "active": bool(personne.active),
+                "est_test": bool(personne.est_test),
+                "source": personne.source,
+                "chronique": None if chronique is None else {
+                    "uuid": chronique.uuid, "etat": chronique.etat,
+                    "nom_fictif": chronique.nom_fictif,
+                    "supprimee": bool(chronique.supprimee)},
+            })
+    return sorted(lignes, key=lambda p: (len(p["table_code"]), p["table_code"],
+                                         p["prenom"].lower()))
+
+
+def modifier_personne(personne_uuid: str, valeurs: dict,
+                      par: str = "admin") -> dict:
+    """Écrit les champs autorisés et journalise ce qui a changé.
+
+    **`est_responsable` n'est pas ici.** Il passe par `designer_gardien`, qui
+    retire la charge aux autres membres avant de la poser : cocher deux
+    personnes de la même table donnerait deux Gardiens, chacun croyant que
+    l'autre s'en occupe. Deux chemins d'écriture pour une même règle divergent
+    toujours.
+
+    **`est_test` non plus** : le poser sur un vrai invité le fait disparaître
+    de toutes les listes, de tous les totaux et de la carte, en silence. C'est
+    le seul champ dont une fausse manœuvre à 21 h ne se verrait qu'en octobre.
+
+    Et **`source` non plus** : c'est un fait historique, pas un réglage.
+    """
+    changements = {}
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None:
+            return {}
+        for champ in CHAMPS_PERSONNE:
+            if champ not in valeurs:
+                continue
+            nouveau = (valeurs[champ] or "").strip() or None
+            if champ == "genre" and nouveau not in ("masculin", "feminin", None):
+                continue
+            if champ == "prenom" and not nouveau:
+                continue          # une personne sans prénom ne se retrouve plus
+            ancien = getattr(personne, champ)
+            if nouveau != ancien:
+                changements[champ] = {"avant": ancien, "apres": nouveau}
+                setattr(personne, champ, nouveau)
+
+        if "table_uuid" in valeurs:
+            nouvelle = (valeurs["table_uuid"] or "").strip() or None
+            if nouvelle != personne.table_uuid:
+                if nouvelle is None or seance.get(TableGroupe, nouvelle):
+                    changements["table_uuid"] = {"avant": personne.table_uuid,
+                                                 "apres": nouvelle}
+                    personne.table_uuid = nouvelle
+
+        for drapeau in ("est_marie", "active"):
+            if drapeau not in valeurs:
+                continue
+            nouveau = valeurs[drapeau] in ("oui", "on", "1", True)
+            if nouveau != bool(getattr(personne, drapeau)):
+                changements[drapeau] = {"avant": bool(getattr(personne, drapeau)),
+                                        "apres": nouveau}
+                setattr(personne, drapeau, nouveau)
+
+        if changements:
+            journaliser(seance, Journal.PERSONNE_MODIFIEE,
+                        objet_uuid=personne_uuid, objet_type="personne",
+                        acteur=personne_uuid, pour_le_compte_de=par,
+                        details=changements)
+            seance.commit()
+    return changements
+
+
+def retirer_gardien(personne_uuid: str, par: str = "admin") -> bool:
+    """Retire la charge, sans la donner à personne.
+
+    Une table sans Gardien se voit sur l'écran de veille ; une table à deux ne
+    se voit pas du tout. Décocher doit donc être possible, et l'écran du soir
+    dira que la table est orpheline.
+    """
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None or not personne.est_responsable:
+            return False
+        personne.est_responsable = False
+        journaliser(seance, Journal.GARDIEN_DESIGNE,
+                    objet_uuid=personne.table_uuid or personne_uuid,
+                    objet_type="table", acteur=personne_uuid,
+                    pour_le_compte_de=par,
+                    details={"nouveau": None,
+                             "anciens": [f"{personne.prenom} {personne.nom}".strip()]})
+        seance.commit()
+        return True

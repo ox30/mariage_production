@@ -1,0 +1,129 @@
+{# La liste de TOUTES les personnes, actives ou non.
+
+   Elle existe pour ce que l'onglet Chroniques ne montre pas : une personne
+   sans chronique y est invisible — et c'est exactement le cas d'une saisie
+   libre accidentelle, qu'aucun écran ne trahissait jusqu'ici.
+
+   Des fiches et non un tableau : huit champs par personne, sur un téléphone à
+   21 h, une ligne de tableau est illisible. Et surtout **un formulaire par
+   personne** : un formulaire unique pour quatre-vingt-treize lignes ferait
+   qu'une fausse manœuvre enregistre tout, et qu'une case décochée dans une
+   ligne filtrée soit prise pour un choix. #}
+<p class="discret">{{ personnes | length }} personne(s) ·
+   {{ total_import }} importée(s) · {{ total_libre }} créée(s) à la main.
+   <strong>La source trahit les créations accidentelles.</strong></p>
+
+<p><label class="discret">Chercher
+  <input type="text" id="filtre-personnes" placeholder="un nom, une table…"
+         style="width:100%"></label></p>
+<p class="discret" id="aucune-personne" hidden>Personne ne correspond.</p>
+
+{% for p in personnes %}
+  <div class="fiche-personne{% if not p.active %} inactive{% endif %}"
+       id="p-{{ p.uuid }}"
+       data-cherche="{{ p.prenom }} {{ p.nom }} {{ p.table }} {{ p.source }}">
+    <form method="post" action="/admin/invites/personne">
+      <input type="hidden" name="uuid" value="{{ p.uuid }}">
+
+      <p style="margin:0 0 0.5rem">
+        <strong>{{ p.prenom }} {{ p.nom }}</strong>
+        <span class="discret">— {{ p.source }}
+          {% if p.est_test %} · <span class="vigilance">TEST</span>{% endif %}
+          {% if not p.active %} · <span class="alerte">inactive</span>{% endif %}
+        </span>
+      </p>
+
+      {# La couture vers l'autre moitié : dès qu'une chronique existe, c'est
+         là-bas qu'on la gère — portrait, photo, crédits, historique. #}
+      <p class="discret" style="margin:0 0 0.6rem">
+        {% if p.chronique %}
+          <a href="/admin/chronique/{{ p.chronique.uuid }}?onglet=portrait">
+            Sa chronique : {{ p.chronique.nom_fictif or p.chronique.etat }}</a>
+          {% if p.chronique.supprimee %} · <span class="alerte">masquée</span>{% endif %}
+        {% else %}
+          Aucune chronique.
+        {% endif %}
+      </p>
+
+      <p><label>Prénom
+        <input type="text" name="prenom" value="{{ p.prenom }}"></label>
+        <label>Nom
+        <input type="text" name="nom" value="{{ p.nom }}"></label></p>
+
+      <p><label>Genre
+        <select name="genre">
+          <option value="" {% if not p.genre %}selected{% endif %}>— inconnu —</option>
+          <option value="masculin" {% if p.genre == "masculin" %}selected{% endif %}>masculin</option>
+          <option value="feminin" {% if p.genre == "feminin" %}selected{% endif %}>féminin</option>
+        </select></label>
+        <label>Table
+        <select name="table_uuid">
+          <option value="">— aucune —</option>
+          {% for t in tables %}
+            <option value="{{ t.uuid }}"
+              {% if t.uuid == p.table_uuid %}selected{% endif %}>{{ t.code }} — {{ t.nom or "sans nom" }}</option>
+          {% endfor %}
+        </select></label></p>
+
+      {# **Une case décochée n'est pas envoyée.** Sans le champ caché qui la
+         précède, « absent » se lirait « pas de changement » et l'on ne
+         pourrait jamais décocher — seulement cocher. Le caché passe d'abord,
+         la case le recouvre quand elle est cochée. #}
+      <p>
+        {# La case du Gardien passe par `designer_gardien` : cocher deux
+           personnes d'une même table donnerait deux Gardiens, chacun croyant
+           que l'autre s'en occupe. #}
+        <input type="hidden" name="est_responsable" value="non">
+        <label><input type="checkbox" name="est_responsable" value="oui"
+                      {% if p.est_responsable %}checked{% endif %}>
+          Gardien de sa table</label>
+        <input type="hidden" name="est_marie" value="non">
+        <label><input type="checkbox" name="est_marie" value="oui"
+                      {% if p.est_marie %}checked{% endif %}>
+          Marié·e</label>
+        <input type="hidden" name="active" value="non">
+        <label><input type="checkbox" name="active" value="oui"
+                      {% if p.active %}checked{% endif %}>
+          Sur la liste</label>
+      </p>
+
+      {% if p.chronique and not p.chronique.supprimee %}
+        {# `Personne.active` et `Chronique.supprimee` sont INDÉPENDANTS :
+           retirer quelqu'un de la liste ne retire pas sa chronique de la carte
+           des mariés. C'est juste — se décommander n'efface pas ce qu'on a
+           écrit — mais pour un doublon il faut les deux gestes. On le dit
+           plutôt que de masquer en cascade : une cascade déclenchée par une
+           correction d'orthographe serait pire. #}
+        <p class="discret">Décocher « sur la liste » ne retire pas sa chronique
+           de la carte des mariés. Si c'est un doublon,
+           <a href="/admin/chronique/{{ p.chronique.uuid }}?onglet=danger">masquez-la
+           aussi</a>.</p>
+      {% endif %}
+
+      <button class="action sobre" type="submit">Enregistrer</button>
+    </form>
+  </div>
+{% endfor %}
+
+<script>
+(function () {
+  var champ = document.getElementById("filtre-personnes");
+  var aucune = document.getElementById("aucune-personne");
+  if (!champ) { return; }
+  // Même dépouillement que la liste des invités : « Schäer » ne se tape pas,
+  // et « Jean-Pierre » se cherche aussi bien avec une espace.
+  function nu(t) {
+    return t.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase().replace(/[-']/g, " ").replace(/\s+/g, " ").trim();
+  }
+  champ.addEventListener("input", function () {
+    var q = nu(champ.value), visibles = 0;
+    document.querySelectorAll(".fiche-personne").forEach(function (f) {
+      var vu = !q || nu(f.dataset.cherche).indexOf(q) !== -1;
+      f.hidden = !vu;
+      if (vu) { visibles++; }
+    });
+    aucune.hidden = visibles !== 0;
+  });
+})();
+</script>

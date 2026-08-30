@@ -1,6 +1,17 @@
 {% extends "admin_base.html" %}
 {% block panneau %}
-  <h1>Liste des invités</h1>
+  <h1>Les invités</h1>
+
+<nav class="onglets sous-onglets">
+  {% for cle, titre in onglets %}
+    <a href="/admin/invites?onglet={{ cle }}"
+       class="onglet{% if cle == onglet %} actif{% endif %}">{{ titre }}</a>
+  {% endfor %}
+</nav>
+
+{% if onglet == "liste" %}
+  {% include "fragment_invites_liste.html" %}
+{% else %}
 
   <p class="discret">
     {{ total_actifs }} personne(s) active(s) en base, dont {{ total_import }}
@@ -121,4 +132,5 @@
     Réimporter le même fichier ne duplique rien.
   </p>
 
+{% endif %}
 {% endblock %}

@@ -19,7 +19,7 @@
 <table class="grille">
   <thead><tr>
     <th>Invité</th><th>Personnage</th><th>Lieu</th>
-    <th>État</th><th>Photo</th>
+    <th>État</th><th>Photo</th><th>Export</th>
   </tr></thead>
   <tbody>
   {% for p in lignes %}
@@ -38,6 +38,10 @@
         {% elif p.photo.etat == "echouee" %}<span class="alerte">échouée</span>
         {% else %}<span class="vigilance">en traitement</span>{% endif %}
       </td>
+      {# EX-ADM-21 — l'export unitaire, sans avoir à ouvrir la fiche : à
+         quatre-vingt-treize chroniques, deux clics par pièce en font
+         cent quatre-vingt-six. #}
+      <td><a href="/admin/chronique/{{ p.uuid }}.json">JSON</a></td>
     </tr>
   {% endfor %}
   </tbody>

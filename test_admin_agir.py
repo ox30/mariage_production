@@ -356,6 +356,36 @@ assert not fichiers_muets, (
 assert not sans_nom, ("champ(s) sans `name` ni `data-` :\n  "
                       + "\n  ".join(sans_nom))
 
+# 3. **Toute case à cocher dans un formulaire doit être précédée d'un champ
+#    caché de même nom.** Une case décochée n'est PAS envoyée : sans le caché,
+#    « absent » se lit « pas de changement » et l'on ne peut jamais décocher,
+#    seulement cocher. Le défaut est invisible aux tests de route — ceux-ci
+#    postent la valeur en direct et ne passent jamais par le formulaire.
+sans_filet = []
+for gabarit in sorted(_pathlib.Path("templates").glob("*.html")):
+    source = gabarit.read_text(encoding="utf-8")
+    for bloc in re.finditer(r"<form\b.*?</form>", source, re.S):
+        corps = bloc.group(0)
+        for case in re.finditer(r'<input[^>]*type="checkbox"[^>]*>', corps):
+            nom = re.search(r'name="([^"]+)"', case.group(0))
+            if not nom:
+                continue
+            # Seules les cases qui REFLÈTENT un état stocké ont besoin du
+            # filet. Une case qui déclenche une action cette fois-ci — comme
+            # « la liste est complète » à l'import — n'a rien à décocher :
+            # absente, elle veut dire « ne fais pas », et c'est le défaut sûr.
+            # Le discriminant est le `checked` conditionnel : lui seul dit que
+            # la case rend une valeur de la base.
+            if "checked" not in case.group(0):
+                continue
+            avant = corps[:case.start()]
+            attendu = f'<input type="hidden" name="{nom.group(1)}"'
+            if attendu not in avant:
+                sans_filet.append(f"{gabarit.name} : case « {nom.group(1)} » "
+                                  "sans champ caché avant elle")
+assert not sans_filet, ("case(s) à cocher qu'on ne pourra jamais décocher :\n  "
+                        + "\n  ".join(sans_filet))
+
 # La sonde doit pouvoir accuser : le jour où aucun gabarit ne porterait plus de
 # formulaire, elle passerait au vert sans avoir rien examiné.
 formulaires = sum(len(re.findall(r"<form\b", g.read_text(encoding="utf-8")))
@@ -709,3 +739,152 @@ pastille = barre.split("onglet=controle")[1].split("</a>")[0]
 assert "•" in pastille, pastille
 
 print("TOUT PASSE — le contrôle montre l'écart, sans le vœu aux mariés")
+
+
+# --- l'onglet Invités : la moitié que Chroniques ne montre pas ----------- #
+
+# Une personne SANS chronique était invisible dans toute l'administration —
+# et c'est exactement le cas d'une saisie libre accidentelle.
+
+from modeles import Personne as _Personne, TableGroupe as _TableGroupe
+
+with bd.Seance() as seance:
+    table_edit = _TableGroupe(code="8", nom="Lórien", ordre=8)
+    seance.add(table_edit)
+    seance.commit()
+    table_edit_uuid = table_edit.uuid
+    fantome = _Personne(prenom="Zacharie", nom="Doublon", genre="masculin",
+                        table_uuid=table_edit_uuid, source="saisie_libre")
+    seance.add(fantome)
+    seance.commit()
+    fantome_uuid = fantome.uuid
+
+liste = client.get("/admin/invites?onglet=liste", auth=ADMIN)
+assert liste.status_code == 200
+assert "Zacharie" in liste.text, "une personne sans chronique reste invisible"
+assert "saisie_libre" in liste.text, "la source ne trahit pas les créations à la main"
+# Elle n'apparaît PAS dans la liste des chroniques : les deux écrans ne
+# répondent pas à la même question.
+assert "Zacharie" not in client.get("/admin/chroniques", auth=ADMIN).text
+
+# Les deux sous-onglets ont chacun leur adresse.
+for cle in ("liste", "import"):
+    page = client.get(f"/admin/invites?onglet={cle}", auth=ADMIN)
+    assert page.status_code == 200
+    assert 'href="/admin/invites?onglet=liste"' in page.text
+    assert 'href="/admin/invites?onglet=import"' in page.text
+# Défaut : la liste, et un onglet inconnu y retombe.
+assert "Zacharie" in client.get("/admin/invites", auth=ADMIN).text
+assert "Zacharie" in client.get("/admin/invites?onglet=nimporte", auth=ADMIN).text
+
+print("TOUT PASSE — l'onglet Invités montre les personnes sans chronique")
+
+
+# --- l'édition écrit ce qui est permis, et pas le reste ------------------ #
+
+client.post("/admin/invites/personne", auth=ADMIN, follow_redirects=False,
+            data={"uuid": fantome_uuid, "prenom": "Zacharie",
+                  "nom": "Corrigé", "genre": "feminin",
+                  "table_uuid": table_edit_uuid, "active": "oui"})
+with bd.Seance() as seance:
+    relu = seance.get(_Personne, fantome_uuid)
+    assert relu.nom == "Corrigé" and relu.genre == "feminin"
+    assert relu.active is True
+
+# Décocher « sur la liste » retire des listes, sans rien effacer. Le
+# formulaire envoie « non » par un champ caché : une case décochée n'est pas
+# envoyée du tout, et « absent » se lirait « pas de changement ».
+client.post("/admin/invites/personne", auth=ADMIN,
+            data={"uuid": fantome_uuid, "prenom": "Zacharie", "active": "non"})
+with bd.Seance() as seance:
+    assert seance.get(_Personne, fantome_uuid).active is False
+
+# `est_test` et `source` ne s'écrivent pas : le premier ferait disparaître un
+# vrai invité de toutes les listes en silence, le second est un fait historique.
+client.post("/admin/invites/personne", auth=ADMIN,
+            data={"uuid": fantome_uuid, "prenom": "Zacharie",
+                  "est_test": "oui", "source": "import", "active": "oui"})
+with bd.Seance() as seance:
+    relu = seance.get(_Personne, fantome_uuid)
+    assert relu.est_test is False and relu.source == "saisie_libre"
+
+# Un prénom vide n'est pas écrit : une personne sans prénom ne se retrouve plus.
+client.post("/admin/invites/personne", auth=ADMIN,
+            data={"uuid": fantome_uuid, "prenom": "  ", "active": "oui"})
+with bd.Seance() as seance:
+    assert seance.get(_Personne, fantome_uuid).prenom == "Zacharie"
+
+# Journalisé avec le détail : on voudra savoir en octobre ce qui a été corrigé.
+with bd.Seance() as seance:
+    trace = seance.scalar(select(Journal).where(
+        Journal.objet_uuid == fantome_uuid,
+        Journal.action == Journal.PERSONNE_MODIFIEE))
+assert trace is not None and "Corrigé" in trace.details_json
+
+print("TOUT PASSE — l'édition écrit les champs permis, et refuse les autres")
+
+
+# --- le rôle de Gardien passe par la même porte que la Veille ------------ #
+
+with bd.Seance() as seance:
+    a = _Personne(prenom="Amaury", nom="Un", table_uuid=table_edit_uuid,
+                  source="import")
+    b = _Personne(prenom="Basile", nom="Deux", table_uuid=table_edit_uuid,
+                  source="import")
+    seance.add_all([a, b])
+    seance.commit()
+    a_uuid, b_uuid = a.uuid, b.uuid
+
+for uuid, prenom in ((a_uuid, "Amaury"), (b_uuid, "Basile")):
+    client.post("/admin/invites/personne", auth=ADMIN,
+                data={"uuid": uuid, "prenom": prenom,
+                      "table_uuid": table_edit_uuid, "active": "oui",
+                      "est_responsable": "oui"})
+
+# **Une table à deux Gardiens n'est pas mieux gardée** : c'est une table où
+# chacun croit que l'autre s'en occupe. Cocher le second retire au premier.
+with bd.Seance() as seance:
+    assert seance.get(_Personne, a_uuid).est_responsable is False
+    assert seance.get(_Personne, b_uuid).est_responsable is True
+assert bd.table_gardee(b_uuid).uuid == table_edit_uuid
+assert bd.table_gardee(a_uuid) is None
+
+# Décocher retire la charge sans la donner : la table devient orpheline, et
+# l'écran de veille le dira.
+client.post("/admin/invites/personne", auth=ADMIN,
+            data={"uuid": b_uuid, "prenom": "Basile",
+                  "table_uuid": table_edit_uuid, "active": "oui",
+                  "est_responsable": "non"})
+assert bd.table_gardee(b_uuid) is None
+assert not next(t for t in bd.veille_des_tables()
+                if t["uuid"] == table_edit_uuid)["gardiens"]
+
+print("TOUT PASSE — le rôle passe par designer_gardien, jamais en double")
+
+
+# --- la couture entre les deux moitiés, dans les deux sens --------------- #
+
+avec = _chronique("Yseult")
+with bd.Seance() as seance:
+    personne_uuid = seance.get(Chronique, avec.uuid).personne_uuid
+
+liste = client.get("/admin/invites?onglet=liste", auth=ADMIN).text
+assert f'href="/admin/chronique/{avec.uuid}?onglet=portrait"' in liste, \
+    "la personne ne mène pas à sa chronique"
+# `Personne.active` et `Chronique.supprimee` sont INDÉPENDANTS : on le DIT
+# plutôt que de masquer en cascade — une cascade déclenchée par une correction
+# d'orthographe serait pire.
+assert "ne retire pas sa chronique" in _texte(liste)
+assert f'href="/admin/chronique/{avec.uuid}?onglet=danger"' in liste
+
+fiche = client.get(f"/admin/chronique/{avec.uuid}?onglet=portrait",
+                   auth=ADMIN).text
+assert f'href="/admin/invites?onglet=liste#p-{personne_uuid}"' in fiche, \
+    "la chronique ne mène pas à sa personne"
+
+# EX-ADM-21 — l'export unitaire depuis la LISTE : à quatre-vingt-treize
+# chroniques, deux clics par pièce en font cent quatre-vingt-six.
+chroniques = client.get("/admin/chroniques", auth=ADMIN).text
+assert f'href="/admin/chronique/{avec.uuid}.json"' in chroniques
+
+print("TOUT PASSE — les deux moitiés se renvoient l'une à l'autre")

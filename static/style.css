@@ -453,6 +453,21 @@ th { font-family: var(--titre); font-weight: 400; color: var(--brume-faible); fo
 .ajoute { color: #7fb77e; }
 .retire { color: var(--braise); text-decoration: line-through; }
 
+/* Une fiche par personne : huit champs sur un téléphone à 21 h ne tiennent
+   pas dans une ligne de tableau. L'inactive est en retrait sans disparaître —
+   c'est justement elle qu'on vient chercher. */
+.fiche-personne {
+  border: 1px solid var(--ardoise-clair);
+  border-radius: 0.3rem;
+  padding: 0.8rem 1rem;
+  margin: 0 0 0.8rem;
+  font-size: 0.93rem;
+}
+
+.fiche-personne.inactive { opacity: 0.55; }
+.fiche-personne label { display: inline-block; margin: 0 0.9rem 0.3rem 0; }
+.fiche-personne input[type="text"], .fiche-personne select { max-width: 12rem; }
+
 .entree-journal {
   border-left: 2px solid var(--ardoise-clair);
   padding: 0.55rem 0 0.55rem 0.9rem;

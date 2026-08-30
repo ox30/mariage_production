@@ -1501,15 +1501,53 @@ def _contexte_invites(request: Request, **extra) -> dict:
         "total_import": sum(1 for p in actifs if p.source == "import"),
         "total_libre": sum(1 for p in actifs if p.source != "import"),
         "plan": None, "applique": False, "fichier": "", "liste_complete": False,
+        "onglet": "liste", "onglets": ONGLETS_INVITES,
+        "personnes": bd.personnes_toutes(),
+        "tables": bd.tables(avec_test=True),
     }
     base.update(extra)
     return base
 
 
+ONGLETS_INVITES = [("liste", "Liste"), ("import", "Import")]
+
+
 @app.get("/admin/invites", response_class=HTMLResponse)
-def admin_invites(request: Request, _: str = Depends(admin)):
-    return gabarits.TemplateResponse("admin_invites.html",
-                                     _contexte_invites(request))
+def admin_invites(request: Request, onglet: str = "liste",
+                  _: str = Depends(admin)):
+    """Deux sous-onglets, chacun à son adresse.
+
+    Comme la fiche d'une chronique, et pour la même raison : un écran qui se
+    recharge, se met en signet et se retrouve après une coupure d'écran.
+    """
+    return gabarits.TemplateResponse(
+        "admin_invites.html",
+        _contexte_invites(request,
+                          onglet=onglet if onglet in dict(ONGLETS_INVITES)
+                          else "liste"))
+
+
+@app.post("/admin/invites/personne")
+async def admin_modifier_personne(request: Request, _: str = Depends(admin)):
+    """Écrit une personne. Le rôle de Gardien passe ailleurs, exprès.
+
+    `designer_gardien` retire la charge aux autres membres de la table avant de
+    la poser. Cocher « responsable » ici sans passer par lui donnerait deux
+    Gardiens sur une même table, chacun croyant que l'autre s'en occupe.
+    """
+    donnees = dict(await request.form())
+    personne_uuid = (donnees.get("uuid") or "").strip()
+    bd.modifier_personne(personne_uuid, donnees)
+    # Le rôle après les autres champs : la table a pu changer dans le même
+    # envoi, et c'est la NOUVELLE table qui doit recevoir la charge.
+    if donnees.get("est_responsable") in ("oui", "on", "1"):
+        personne = bd.personne(personne_uuid)
+        if personne is not None and personne.table_uuid:
+            bd.designer_gardien(personne.table_uuid, personne_uuid)
+    elif bd.table_gardee(personne_uuid) is not None:
+        bd.retirer_gardien(personne_uuid)
+    return RedirectResponse("/admin/invites?onglet=liste#p-" + personne_uuid,
+                            status_code=303)
 
 
 @app.post("/admin/invites/simuler", response_class=HTMLResponse)
@@ -1533,7 +1571,10 @@ async def admin_invites_simuler(request: Request, _: str = Depends(admin)):
             "renommé ? Le gabarit est dans exemples/invites-gabarit.xlsx."])
     return gabarits.TemplateResponse(
         "admin_invites.html",
-        _contexte_invites(request, plan=plan, fichier=chemin.name,
+        # Le résultat d'un import s'affiche sur l'onglet de l'import :
+        # rendu sous « liste », il tomberait dans une branche non affichée.
+        _contexte_invites(request, onglet="import", plan=plan,
+                          fichier=chemin.name,
                           liste_complete=liste_complete))
 
 
@@ -1552,7 +1593,8 @@ async def admin_invites_appliquer(request: Request, _: str = Depends(admin)):
         chemin, liste_complete=donnees.get("liste_complete") == "oui")
     return gabarits.TemplateResponse(
         "admin_invites.html",
-        _contexte_invites(request, plan=plan, applique=plan.recevable,
+        _contexte_invites(request, onglet="import", plan=plan,
+                          applique=plan.recevable,
                           fichier=nom))
 
 
@@ -1809,6 +1851,61 @@ def _fiche(ligne, onglet: str = "portrait") -> dict:
         "journal": _journal_de(ligne) if onglet == "historique" else [],
         "ecarts": _ecarts_depuis_le_portrait(ligne) if onglet == "controle" else [],
     }
+
+
+@app.get("/admin/personnes", response_class=HTMLResponse)
+def admin_personnes(request: Request, test: str = "", filtre: str = "",
+                    _: str = Depends(admin)):
+    """L'administration du personnel : qui est invité, où, et avec quel rôle.
+
+    Séparée des chroniques, et c'est délibéré : ce sont deux objets à deux
+    moments. Avant la soirée on règle les noms, les tables et les Gardiens ;
+    pendant et après, on relit les textes et les photos. Quatre-vingt-treize
+    lignes contre soixante-dix, avec des colonnes qui ne se recouvrent pas.
+
+    Le lien entre les deux est fort dans les deux sens — c'est ce qui remplace
+    la fusion.
+    """
+    sur_le_test = test == "oui"
+    lignes = [p for p in bd.lister_personnes(avec_test=True)
+              if p["est_test"] == sur_le_test]
+    # Quatre-vingt-treize lignes sur un téléphone à 21 h, sans filtre, c'est
+    # une liste qu'on ne lit pas.
+    if filtre == "doublons":
+        lignes = [p for p in lignes if p["doublons"]]
+    elif filtre == "libre":
+        lignes = [p for p in lignes if p["source"] == "saisie_libre"]
+    elif filtre == "sans_table":
+        lignes = [p for p in lignes if not p["table_uuid"]]
+    elif filtre == "inactifs":
+        lignes = [p for p in lignes if not p["active"]]
+    elif filtre == "sans_chronique":
+        lignes = [p for p in lignes if p["active"] and not p["chronique"]]
+    return gabarits.TemplateResponse(
+        "admin_personnes.html",
+        {"request": request, "lignes": lignes, "filtre": filtre,
+         "sur_le_test": sur_le_test, "mode_test": bd.mode_test_actif(),
+         "tables": bd.tables(avec_test=True),
+         "total": len([p for p in bd.lister_personnes(avec_test=True)
+                       if p["est_test"] == sur_le_test])})
+
+
+@app.post("/admin/personnes/{personne_uuid}")
+async def admin_modifier_personne(request: Request, personne_uuid: str,
+                                  _: str = Depends(admin)):
+    donnees = dict(await request.form())
+    # Les cases non cochées n'arrivent pas : leur absence VAUT « faux », et
+    # c'est pour ça qu'un champ caché les accompagne dans le gabarit. Sans lui,
+    # décocher n'aurait aucun effet.
+    valeurs = {c: donnees.get(c) for c in bd.CHAMPS_PERSONNE
+               if c in donnees or f"_{c}" in donnees}
+    for drapeau in ("est_responsable", "est_marie", "active"):
+        if f"_{drapeau}" in donnees:
+            valeurs[drapeau] = donnees.get(drapeau) is not None
+    bd.modifier_personne(personne_uuid, valeurs)
+    suite = (donnees.get("retour") or "/admin/personnes").strip()
+    return RedirectResponse(suite if suite.startswith("/admin/") else
+                            "/admin/personnes", status_code=303)
 
 
 @app.get("/admin/veille", response_class=HTMLResponse)

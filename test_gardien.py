@@ -488,3 +488,75 @@ assert "utilisé vos 5 suppressions" in _texte(
     client.get(f"/enluminures/{gardien.uuid}?refus=suppressions").text)
 
 print("TOUT PASSE — cinq suppressions figent la table, et l'écran le dit")
+
+
+# --- l'écran va regarder si la conversion est finie ---------------------- #
+
+# *Constaté en production le 30 août :* une enluminure déposée restait sur
+# « Arrivée. Le Conseil la prépare » jusqu'à un F5. La conversion se fait en
+# tâche de fond (EX-PHO-10) — l'écran doit aller voir, comme le portrait le
+# fait déjà pendant que le Conseil écrit.
+
+table_c = _table("5", "La Comté")
+veilleur = _invite("Ferdinand", table_c, responsable=True)
+
+# Rien en attente : AUCUN sondage. Une grille qui interrogerait toutes les deux
+# secondes des images prêtes tiendrait un fil occupé toute la soirée pour ne
+# rien apprendre.
+vide = client.get(f"/enluminures/{veilleur.uuid}").text
+assert "hx-get" not in vide.split('id="zone-enluminures"')[1]
+
+client.post(f"/enluminures/{veilleur.uuid}",
+            files={"fichier": ("e.jpg", _img(), "image/jpeg")})
+en_attente = client.get(f"/enluminures/{veilleur.uuid}").text
+grille = en_attente.split('id="zone-enluminures"')[1]
+assert f'hx-get="/enluminures/{veilleur.uuid}/etat"' in grille, \
+    "la grille ne va jamais regarder si la conversion est finie"
+assert 'hx-trigger="every 2s"' in grille
+assert "en-preparation" in grille
+# htmx doit être chargé sur cet écran, sinon les attributs ne servent à rien.
+assert "htmx.min.js" in en_attente
+
+# Le fragment se sert seul — c'est lui que HTMX rappelle.
+fragment = client.get(f"/enluminures/{veilleur.uuid}/etat")
+assert fragment.status_code == 200
+assert "Le Conseil la prépare" in _texte(fragment.text)
+# EX-CDT-16 — la même clôture que le reste : le rôle, pas le bouton.
+assert client.get(f"/enluminures/{ordinaire.uuid}/etat").status_code == 403
+
+# Une fois convertie, l'image apparaît ET le sondage s'arrête.
+_ = [taches.traiter_une() for _ in range(6)]
+prete = client.get(f"/enluminures/{veilleur.uuid}").text
+grille = prete.split('id="zone-enluminures"')[1]
+assert "hx-get" not in grille, "le sondage continue sur une grille finie"
+assert "/web?v=" in grille, "l'image n'apparaît pas une fois prête"
+assert "Le Conseil la prépare" not in _texte(grille)
+
+print("TOUT PASSE — la grille se rafraîchit seule, et s'arrête quand c'est prêt")
+
+
+# --- la photo personnelle avait le même défaut --------------------------- #
+
+# Même cause, même remède : le portrait ne sondait que pendant l'écriture de
+# la chronique. Une photo déposée après restait « en préparation » jusqu'à un
+# rechargement.
+photos.retirer(photos.courante(veilleur.personne_uuid).uuid) \
+    if photos.courante(veilleur.personne_uuid) else None
+photos.deposer(veilleur.personne_uuid, _img())
+
+page = client.get(f"/portrait/{veilleur.uuid}").text
+zone = page.split('id="zone-photo"')[1]
+assert f'hx-get="/photo/{veilleur.uuid}/etat"' in zone, \
+    "la quittance ne va jamais regarder si la conversion est finie"
+assert "en-preparation" in zone
+
+fragment = client.get(f"/photo/{veilleur.uuid}/etat")
+assert fragment.status_code == 200
+assert "Votre photo est arrivée" in _texte(fragment.text)
+
+_ = [taches.traiter_une() for _ in range(6)]
+zone = client.get(f"/portrait/{veilleur.uuid}").text.split('id="zone-photo"')[1]
+assert "hx-get" not in zone.split("</div>")[0], "le sondage continue sur une photo prête"
+assert f'src="/photo/{veilleur.uuid}/vignette?v=' in zone
+
+print("TOUT PASSE — la quittance de la photo personnelle se rafraîchit aussi")

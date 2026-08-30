@@ -1,0 +1,56 @@
+{# La quittance de la photo (EX-PHO-15) et son rafraîchissement.
+
+   Sans elle, l'invité ne sait pas si sa photo est arrivée — donc il renvoie,
+   et un renvoi consomme une modification. Quatre états, parce qu'EX-PHO-10
+   garantit qu'il existe toujours une fenêtre entre « reçue » et « affichable ».
+
+   Extrait de `fragment_portrait.html` pour être servi seul : c'est ce qui
+   permet au seul bloc concerné de se rafraîchir, au lieu de redessiner tout
+   le portrait toutes les deux secondes. #}
+{# LA QUITTANCE (EX-PHO-15). Sans elle, l'invité ne sait pas si sa photo est
+   arrivée — donc il renvoie, et un renvoi consomme une modification. Le
+   silence coûtait du budget. Quatre états, parce qu'EX-PHO-10 garantit
+   qu'il existe toujours une fenêtre entre « reçue » et « affichable ». #}
+{% if photo is none %}
+  <a class="action sobre" href="/photo/{{ p.uuid }}">Ajouter votre photo</a>
+  <p class="discret">Elle accompagnera votre chronique. Facultative.</p>
+
+{% elif photo.etat == "traitement" %}
+  {# *Constaté en production le 30 août :* le texte « Le Conseil la prépare »
+     restait jusqu'à un F5. La conversion se fait en tâche de fond (EX-PHO-10),
+     donc l'écran doit aller REGARDER si elle est finie — comme le portrait le
+     fait déjà pendant que le Conseil écrit. Le sondage vit dans cette seule
+     branche : il s'arrête de lui-même dès que l'état n'est plus transitoire. #}
+  <div hx-get="/photo/{{ p.uuid }}/etat" hx-trigger="every 2s"
+       hx-target="#zone-photo">
+    <p class="quittance"><strong>Votre photo est arrivée.</strong>
+       <span class="en-preparation">Le Conseil la prépare</span> — inutile de
+       la renvoyer.</p>
+  </div>
+  {# EX-CYC-13 — le décompte est répété au moment où il éclaire une
+     décision, jamais laissé à la seule aide. #}
+  <p class="discret">Il vous reste {{ budget_photo.restants }}
+     changement{{ "s" if budget_photo.restants != 1 else "" }}.</p>
+  {% if not budget_photo.epuise %}
+    <a class="action sobre" href="/photo/{{ p.uuid }}">Changer de photo</a>
+  {% endif %}
+
+{% elif photo.etat == "prete" %}
+  <img class="vignette" src="/photo/{{ p.uuid }}/vignette?v={{ photo.uuid[:12] }}" alt="Votre photo">
+  <p class="discret">Il vous reste {{ budget_photo.restants }}
+     changement{{ "s" if budget_photo.restants != 1 else "" }}.</p>
+  {% if not budget_photo.epuise %}
+    <a class="action sobre" href="/photo/{{ p.uuid }}">Changer de photo</a>
+  {% endif %}
+
+{% else %}
+  {# EX-PHO-33 — échec de CONVERSION, pas d'envoi : le fichier est intact sur
+     le volume, et le retrait est GRATUIT. Le dire, sinon l'invité croit
+     avoir perdu un crédit et n'ose plus rien. #}
+  <p class="alerte"><strong>Votre photo n'a pas pu être préparée.</strong>
+     Elle est bien arrivée, mais le Conseil n'a pas su la lire.</p>
+  <p class="discret">Cela ne vous a rien coûté : il vous reste
+     {{ budget_photo.restants }}
+     changement{{ "s" if budget_photo.restants != 1 else "" }}.</p>
+  <a class="action sobre" href="/photo/{{ p.uuid }}">Reprendre une photo</a>
+{% endif %}

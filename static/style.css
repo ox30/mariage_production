@@ -271,6 +271,24 @@ input[type="text"]:focus, textarea:focus {
 
 /* Le bandeau du Gardien. Il remplace un carton qu'on remettait en main
    propre : il doit se voir sans crier, sur tous ses écrans. */
+/* « en préparation » : trois points qui respirent. En CSS seul — une image
+   animée serait un fichier de plus à charger en 4G pour dire « patientez ».
+   Et `prefers-reduced-motion` la coupe, parce qu'une animation perpétuelle
+   gêne vraiment certaines personnes. */
+.en-preparation::after {
+  content: "…";
+  animation: respire 1.4s ease-in-out infinite;
+}
+
+@keyframes respire {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .en-preparation::after { animation: none; opacity: 1; }
+}
+
 .bandeau-gardien {
   border: 1px solid var(--laiton);
   border-radius: 0.3rem;

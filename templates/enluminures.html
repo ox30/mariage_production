@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block titre %}Les enluminures perdues{% endblock %}
 {% block corps %}
+{# Servi depuis l'image et non depuis un CDN : le rafraîchissement est
+   FONCTIONNEL, pas décoratif, et cent téléphones en 4G qui dépendraient
+   d'un tiers auraient un point de panne de plus. #}
+<script src="/static/htmx.min.js?v={{ empreinte_htmx }}"></script>
 <div class="enveloppe">
 {% if table is none %}
   <h1>Ce n'est pas votre office</h1>
@@ -83,43 +87,7 @@
     </p>
   {% endif %}
 
-  {% if enluminures %}
-    <hr>
-    <div class="grille-enluminures">
-      {% for e in enluminures %}
-        <figure class="enluminure">
-          {% if e.chemin_vignette %}
-            {# La vignette mène à la version large — un simple lien plutôt
-               qu'une visionneuse : rien à charger, rien à casser sur vingt
-               téléphones différents. `?v=` parce que sans empreinte l'URL ne
-               change pas d'une image à l'autre et le navigateur rend la
-               précédente. #}
-            <a href="/enluminure/{{ p.uuid }}/{{ e.uuid }}/web?v={{ e.uuid[:12] }}">
-              <img src="/enluminure/{{ p.uuid }}/{{ e.uuid }}?v={{ e.uuid[:12] }}"
-                   alt="Enluminure — toucher pour l'agrandir"></a>
-          {% elif e.etat == "traitement" %}
-            <figcaption class="vigilance">Arrivée. Le Conseil la prépare.</figcaption>
-          {% else %}
-            <figcaption class="alerte">N'a pas pu être préparée.</figcaption>
-          {% endif %}
-
-          {# Retirer une enluminure en échec est GRATUIT : c'est notre défaut,
-             pas le sien. Cinq suppressions, c'est peu — en brûler à nettoyer
-             nos pannes serait payer deux fois. #}
-          {% if e.etat == "echouee" or budget.peut_supprimer %}
-            <form method="post"
-                  action="/enluminures/{{ p.uuid }}/retirer">
-              <input type="hidden" name="photo" value="{{ e.uuid }}">
-              <button class="action sobre" type="submit"
-                      onclick="return confirm('Retirer cette enluminure ?{% if e.etat != "echouee" %} Il vous restera {{ budget.max_suppressions - budget.suppressions - 1 }} suppression(s).{% endif %}')">
-                {% if e.etat == "echouee" %}Écarter{% else %}Retirer{% endif %}
-              </button>
-            </form>
-          {% endif %}
-        </figure>
-      {% endfor %}
-    </div>
-  {% endif %}
+  <div id="zone-enluminures">{% include "fragment_enluminures.html" %}</div>
 
   <p class="discret" style="margin-top:1.5rem;text-align:center">
     <a href="/portrait/{{ p.uuid }}">Revenir à votre chronique</a></p>

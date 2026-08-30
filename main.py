@@ -1159,6 +1159,35 @@ async def deposer_photo(identifiant: str, fichier: UploadFile = File(...)):
     return JSONResponse({"photo": photo.uuid, "etat": photo.etat})
 
 
+@app.get("/photo/{identifiant}/etat", response_class=HTMLResponse)
+def etat_photo(request: Request, identifiant: str):
+    """Le seul bloc de la quittance, pour que HTMX le rafraîchisse seul.
+
+    Redessiner tout le portrait toutes les deux secondes pour surveiller une
+    conversion de trois secondes serait payer cher un renseignement bref.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    return gabarits.TemplateResponse(
+        "fragment_photo_etat.html",
+        {"request": request, "p": ligne,
+         "photo": photos.courante(ligne.personne_uuid),
+         "budget_photo": photos.budget(ligne.personne_uuid)})
+
+
+@app.get("/enluminures/{identifiant}/etat", response_class=HTMLResponse)
+def etat_enluminures(request: Request, identifiant: str):
+    """La grille seule, rafraîchie tant qu'une enluminure est en conversion."""
+    ligne = _chronique_ou_404(identifiant)
+    table = bd.table_gardee(ligne.personne_uuid)
+    if table is None:
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas Gardien")
+    return gabarits.TemplateResponse(
+        "fragment_enluminures.html",
+        {"request": request, "p": ligne,
+         "budget": photos.budget_table(table.uuid),
+         "enluminures": photos.enluminures(table.uuid)})
+
+
 @app.get("/photo/{identifiant}/vignette")
 def vignette_photo(identifiant: str):
     """La vignette de SA photo, servie depuis le volume.

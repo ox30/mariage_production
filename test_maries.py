@@ -89,6 +89,12 @@ for cle in RETIREES | set(FORCEES):
     assert f'name="{cle}"' not in page_marie.text, cle
 for cle in reduites:
     assert f'name="{cle}"' in page_marie.text, cle
+# Le PREMIER écran annonce lui aussi combien de questions complémentaires
+# suivront : « cinq questions de plus » à qui n'en recevra que quatre est un
+# mensonge posé dès la première page.
+lu_premier = _texte(page_marie.text).lower()
+assert "quatre question" in lu_premier, lu_premier[-400:]
+assert "cinq question" not in lu_premier
 
 page_invite = client.post("/identite/choisir",
                           data={"personne_uuid": invite}, follow_redirects=True)
@@ -226,3 +232,59 @@ source = "\n".join(f.read_text(encoding="utf-8") for f in _fichiers)
 assert "mot_de_passe" + "_maries" not in source
 
 print("TOUT PASSE — le mot de passe des mariés a disparu partout")
+
+
+# --- le SECOND étage se réduit aussi ------------------------------------- #
+
+# *Constaté en production le 30 août :* le premier étage était réduit, le
+# second non — « Comment connais-tu les mariés ? » était encore posée. Mon test
+# éprouvait `questions_du_bloc("bonus", True)` et jamais l'ÉCRAN qui la sert.
+# La route `/bonus/{id}/questions` servait `CONFIG["bonus"]` en dur.
+
+uid_bonus = test_outils.creer_chronique(
+    "Delphine", "Marie", {"metier": "reine", "allegeance": "La Lumière"},
+    main.CODES_LIEUX, etat="prete")
+with bd.Seance() as seance:
+    chronique = seance.get(Chronique, uid_bonus)
+    personne = seance.get(Personne, chronique.personne_uuid)
+    personne.est_marie = True
+    personne.genre = "feminin"
+    seance.commit()
+
+ecran = client.get(f"/bonus/{uid_bonus}/questions").text
+assert 'name="lien"' not in ecran, "« Comment connais-tu les mariés ? » est posée"
+for cle in bonus_reduit:
+    assert f'name="{cle}"' in ecran, cle
+
+# Un invité ordinaire garde les cinq.
+uid_simple = test_outils.creer_chronique("Hubert", "Simple", {"metier": "x"},
+                                         main.CODES_LIEUX, etat="prete")
+ordinaire = client.get(f"/bonus/{uid_simple}/questions").text
+assert 'name="lien"' in ordinaire
+
+# Le NOMBRE annoncé suit la liste servie : « cinq questions de plus » à qui
+# n'en reçoit que quatre est un mensonge que personne ne relit.
+assert main.nb_bonus_mot(True) == "quatre", main.nb_bonus_mot(True)
+assert main.nb_bonus_mot(False) == "cinq", main.nb_bonus_mot(False)
+lu_ecran = _texte(ecran).lower()
+assert "quatre" in lu_ecran and "cinq" not in lu_ecran, lu_ecran[:200]
+
+# Les quatre écrans qui l'annoncent le disent tous juste — il ne reste aucune
+# constante de module qui pourrait diverger.
+_source = __import__("pathlib").Path("main.py").read_text(encoding="utf-8")
+assert "NB_BONUS_MOT" not in _source, "une constante morte invite à la reprendre"
+
+# Les écrans du portrait exigent un portrait : sans lui, on éprouverait le
+# rendu d'une chronique inachevée et non le décompte.
+bd.enregistrer_portrait(uid_bonus, {
+    "nom_fictif": "Arwen la Claire", "peuple": "elfe",
+    "portrait": "Un paragraphe.", "indice": "Un indice.", "fuites_noms": [],
+    "modele": "claude-sonnet-5", "duree_s": 6.0,
+    "jetons_entree": 900, "jetons_sortie": 300})
+
+for adresse in (f"/bonus/{uid_bonus}", f"/portrait/{uid_bonus}",
+                f"/portrait/{uid_bonus}/reprendre"):
+    page = _texte(client.get(adresse, follow_redirects=True).text).lower()
+    assert "cinq question" not in page, adresse
+
+print("TOUT PASSE — le second étage des mariés est réduit, et le compte suit")

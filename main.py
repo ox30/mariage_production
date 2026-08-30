@@ -441,8 +441,20 @@ bd.CLES_HORS_PORTRAIT = {
 # configuration : déplacer une question d'un étage à l'autre ne doit jamais
 # obliger à corriger un texte à la main.
 NB_BONUS = len(CONFIG["bonus"])
-NB_BONUS_MOT = {1: "une", 2: "deux", 3: "trois", 4: "quatre", 5: "cinq",
-                6: "six", 7: "sept", 8: "huit"}.get(NB_BONUS, str(NB_BONUS))
+_EN_LETTRES = {1: "une", 2: "deux", 3: "trois", 4: "quatre", 5: "cinq",
+               6: "six", 7: "sept", 8: "huit"}
+
+
+def nb_bonus_mot(est_marie: bool = False) -> str:
+    """Combien de questions complémentaires, en toutes lettres.
+
+    Dérivé de la liste RÉELLEMENT servie. La constante de module annonçait
+    « cinq questions de plus » à un marié qui n'en recevait que quatre : le
+    nombre et la liste doivent venir du même endroit, sinon ils divergent au
+    premier retrait.
+    """
+    combien = len(questions_du_bloc("bonus", est_marie))
+    return _EN_LETTRES.get(combien, str(combien))
 
 securite = HTTPBasic()
 
@@ -741,7 +753,7 @@ def _ecran_questionnaire(request: Request, personne):
             "action": "/valider",
             "titre": "Six questions",
             "bifurcation": True,
-            "nb_bonus_mot": NB_BONUS_MOT,
+            "nb_bonus_mot": nb_bonus_mot(bool(personne.est_marie)),
             "facultatif": False,
         },
     )
@@ -882,7 +894,7 @@ def _contexte_portrait(request: Request, ligne) -> dict:
     """
     contexte = {"request": request, "p": ligne,
                 "max_generations": MAX_GENERATIONS,
-                "nb_bonus_mot": NB_BONUS_MOT,
+                "nb_bonus_mot": nb_bonus_mot(bool(ligne.est_marie)),
                 "motifs": CONFIG.get("motifs_reprise", []),
                 # EX-PHO-10 laisse TOUJOURS une fenêtre où la photo est reçue
                 # mais pas encore affichable : c'est le principe même de la
@@ -973,7 +985,7 @@ def reprendre(request: Request, identifiant: str):
             "action": f"/portrait/{identifiant}/reprendre",
             "titre": "Reprendre mes réponses",
             "bifurcation": False,
-            "nb_bonus_mot": NB_BONUS_MOT,
+            "nb_bonus_mot": nb_bonus_mot(bool(ligne.est_marie)),
             "facultatif": False,
             "reprise": True,
             "retour_vers": f"/portrait/{identifiant}",
@@ -1031,7 +1043,8 @@ def proposer_bonus(request: Request, identifiant: str):
         return RedirectResponse(_apres_le_portrait(ligne), status_code=303)
     return gabarits.TemplateResponse(
         "bonus_intro.html",
-        {"request": request, "p": ligne, "nb_bonus_mot": NB_BONUS_MOT,
+        {"request": request, "p": ligne,
+         "nb_bonus_mot": nb_bonus_mot(bool(ligne.est_marie)),
          "sortie": _apres_le_portrait(ligne)}
     )
 
@@ -1047,11 +1060,14 @@ def questions_bonus(request: Request, identifiant: str):
             "request": request,
             "prenom": ligne.prenom,
             "nom": ligne.nom,
-            "questions": CONFIG["bonus"],
+            # EX-MAR-03 — le second étage se réduit AUSSI. « Comment
+            # connais-tu les mariés ? » n'a pas de sens pour eux, et le lien
+            # leur est de toute façon injecté au moment du prompt.
+            "questions": questions_du_bloc("bonus", bool(ligne.est_marie)),
             "action": f"/bonus/{identifiant}",
-            "titre": f"{NB_BONUS_MOT.capitalize()} de plus",
+            "titre": f"{nb_bonus_mot(bool(ligne.est_marie)).capitalize()} de plus",
             "bifurcation": False,
-            "nb_bonus_mot": NB_BONUS_MOT,
+            "nb_bonus_mot": nb_bonus_mot(bool(ligne.est_marie)),
             "facultatif": True,
         },
     )

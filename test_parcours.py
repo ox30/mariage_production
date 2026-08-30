@@ -395,7 +395,7 @@ print("TOUT PASSE — longueur adaptée au volume")
 assert [q["cle"] for q in main.CONFIG["obligatoires"]][-1] == "souhait", \
     "le vœu clôt le premier étage"
 assert "souhait" not in [q["cle"] for q in main.CONFIG["bonus"]]
-assert main.NB_BONUS == 5 and main.NB_BONUS_MOT == "cinq"
+assert main.NB_BONUS == 5 and main.nb_bonus_mot() == "cinq"
 
 r = test_outils.entrer_identite(c2, "Hal", "Test")
 assert "Que souhaites-tu à Solène et Gaspard" in r.text.replace("&#39;", "'")

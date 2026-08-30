@@ -445,7 +445,6 @@ def admin(identifiants: HTTPBasicCredentials = Depends(securite)) -> str:
 # worker prenne la tâche — le perdre au redémarrage ne coûte qu'un portrait
 # réécrit sans indication, jamais une réponse.
 _motifs_en_attente: dict[str, str] = {}
-<<<<<<< HEAD
 
 
 def _reponses_pour_le_modele(ligne) -> dict:
@@ -532,78 +531,6 @@ taches.enregistrer_traitant("copie_stockage_objet", photos.copier)
 def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
     """Met la génération en file. EX-IA-43 refuse le doublon d'elle-même.
 
-=======
-
-
-def _generer_chronique(identifiant: str) -> None:
-    """Traitant de la file pour une chronique (EX-ARC-14).
-
-    Traduit les exceptions du client d'API en décisions de la file. Seul le
-    429 déclenche la barrière globale : il est propre au compte, alors qu'un
-    529 est une saturation du fournisseur qui se traite tâche par tâche
-    (EX-IA-22, EX-ARC-21).
-    """
-    ligne = bd.lire(identifiant)
-    if ligne is None:
-        return
-    bd.marquer_en_cours(identifiant)
-    interdits = [m for m in bd.tous_les_prenoms() if len(m) >= 3]
-    # Les prénoms des mariés servent à comprendre les réponses, jamais à
-    # être écrits : ils sont donc aussi interdits en sortie.
-    interdits += [v for v in COUPLE.values() if len(v) >= 3]
-    try:
-        portrait = ia.generer(
-            CONFIG,
-            {
-                "lieu": LIEUX_PAR_CODE.get(ligne.lieu, ligne.lieu),
-                "reponses": json.loads(ligne.reponses_json),
-                "noms_interdits": interdits,
-                "noms_fictifs_pris": bd.noms_fictifs_pris(sauf=identifiant),
-                "genre": ligne.genre,
-                "motif_reprise": _motifs_en_attente.pop(identifiant, None),
-                "couple": COUPLE,
-                # Section 4.6 — le modèle et le plafond viennent du bloc `ia:`
-                # du config.yaml du projet, relus à chaud (EX-ADM-02,
-                # EX-IA-20). L'écart « lu dans MODELE_IA » se referme ici.
-                "modele": config.parametre("ia.modele", ia.MODELE_DEFAUT),
-                "jetons_max": config.parametre("ia.jetons_max",
-                                               ia.JETONS_MAX_DEFAUT),
-            },
-        )
-    except ia.ErreurGeneration as exc:
-        exc.trace["empreinte_config"] = EMPREINTE_QUESTIONS
-        bd.enregistrer_echec(identifiant, f"{exc.categorie} — {exc}",
-                             trace=exc.trace)
-        if not exc.temporaire:
-            raise taches.EchecDefinitif(f"{exc.categorie} — {exc}") from exc
-        raise taches.EchecTemporaire(
-            f"{exc.categorie} — {exc}",
-            reprendre_apres_s=exc.reprendre_apres_s,
-            suspendre_tout_s=(exc.reprendre_apres_s or 30.0)
-            if exc.categorie == "debit" else None,
-        ) from exc
-
-    portrait["empreinte_config"] = EMPREINTE_QUESTIONS
-    bd.enregistrer_portrait(identifiant, portrait)
-
-
-taches.enregistrer_traitant("generation_chronique", _generer_chronique)
-# Le crochet d'échec est ce qui recoud l'état terminal de la tâche à l'objet
-# qu'elle servait. Sans lui, une photo dont la conversion échoue reste « en
-# préparation » pour toujours — et le crédit n'est jamais rendu (EX-PHO-33).
-taches.enregistrer_traitant("conversion_image", photos.convertir,
-                            sur_echec=photos.marquer_echec)
-# Pas de `sur_echec` ici, et c'est délibéré : une copie qui échoue ne change
-# RIEN à la photo. Elle est sur le volume, elle s'affiche, l'invité n'a rien à
-# savoir. C'est un défaut de sauvegarde, et c'est au tableau de bord de le dire
-# à celui qui peut y remédier.
-taches.enregistrer_traitant("copie_stockage_objet", photos.copier)
-
-
-def _lancer_generation(identifiant: str, motif: str | None = None) -> None:
-    """Met la génération en file. EX-IA-43 refuse le doublon d'elle-même.
-
->>>>>>> 47dd3cf4591be774fafb57395de734847dc26c1a
     Plus de vérification préalable de l'état : entre le contrôle et l'écriture,
     un double appui sur « Réécrivez-moi ça » avait tout le temps de passer.
     L'index unique partiel rend la course impossible au lieu de la rendre
@@ -790,12 +717,8 @@ def _ecran_questionnaire(request: Request, personne):
             "prenom": personne.prenom,
             "nom": personne.nom,
             "genre": personne.genre or "",
-<<<<<<< HEAD
             "questions": questions_du_bloc("obligatoires",
                                            bool(personne.est_marie)),
-=======
-            "questions": CONFIG["obligatoires"],
->>>>>>> 47dd3cf4591be774fafb57395de734847dc26c1a
             "action": "/valider",
             "titre": "Six questions",
             "bifurcation": True,
@@ -904,12 +827,8 @@ async def valider(request: Request):
     if personne is None:
         return RedirectResponse("/identite?intention=creer", status_code=303)
 
-<<<<<<< HEAD
     reponses = _reponses_du_formulaire(donnees, "obligatoires",
                                        bool(personne.est_marie))
-=======
-    reponses = _reponses_du_formulaire(donnees, "obligatoires")
->>>>>>> 47dd3cf4591be774fafb57395de734847dc26c1a
     appareil = identite.du_requete(request)
 
     # Deuxième barrage : /valider peut être posté sans passer par l'écran

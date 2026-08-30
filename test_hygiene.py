@@ -230,11 +230,7 @@ _modele = _yaml.safe_load(
     (RACINE / "exemples" / "config.yaml").read_text(encoding="utf-8"))
 import acces as _acces
 
-<<<<<<< HEAD
 for _cle in ("mot_de_passe",):
-=======
-for _cle in ("mot_de_passe", "mot_de_passe_maries"):
->>>>>>> 47dd3cf4591be774fafb57395de734847dc26c1a
     _valeur = str(_modele.get("acces", {}).get(_cle, ""))
     assert _acces.normaliser(_valeur) == _acces.normaliser(
         _acces.MOT_DE_PASSE_EXEMPLE), (

@@ -117,6 +117,79 @@ class Budget:
         return self.restants <= 0
 
 
+@dataclass
+class BudgetTable:
+    """EX-CDT-14 — trois compteurs indépendants, tous dérivés.
+
+    Ils s'emboîtent : cinq affichées plus cinq suppressions font dix envois.
+    Les trois se lient donc en même temps — arrivé à cinq, il faut supprimer
+    pour ajouter ; après cinq suppressions, la table est figée. C'est voulu, et
+    l'administrateur peut rendre des crédits.
+    """
+    affichees: int
+    envois: int
+    suppressions: int
+    max_affichees: int
+    max_envois: int
+    max_suppressions: int
+
+    @property
+    def peut_deposer(self) -> bool:
+        return (self.affichees < self.max_affichees
+                and self.envois < self.max_envois)
+
+    @property
+    def peut_supprimer(self) -> bool:
+        return self.suppressions < self.max_suppressions
+
+    @property
+    def restantes(self) -> int:
+        """Combien il en manque pour atteindre les cinq."""
+        return max(0, self.max_affichees - self.affichees)
+
+
+def budget_table(table_uuid: str) -> BudgetTable:
+    with bd.Seance() as seance:
+        return _budget_table(seance, table_uuid)
+
+
+def _budget_table(seance, table_uuid: str) -> BudgetTable:
+    depuis = bd.borne_de_remise(seance, table_uuid,
+                               Journal.ENLUMINURE_CREDITEE)
+    def compte(action):
+        requete = (select(func.count()).select_from(Journal)
+                   .where(Journal.objet_uuid == table_uuid,
+                          Journal.action == action))
+        if depuis is not None:
+            requete = requete.where(Journal.horodatage > depuis)
+        return seance.scalar(requete) or 0
+
+    affichees = seance.scalar(
+        select(func.count()).select_from(Photo)
+        .where(Photo.table_uuid == table_uuid, Photo.portee == "table",
+               Photo.supprimee.is_(False))) or 0
+    return BudgetTable(
+        affichees=affichees,
+        # Un échec de conversion est NOTRE défaut : il ne se décompte pas.
+        envois=max(0, compte(Journal.ENLUMINURE_DEPOSEE)
+                   - compte(Journal.ENLUMINURE_ECHOUEE)),
+        suppressions=compte(Journal.ENLUMINURE_RETIREE),
+        max_affichees=int(config.parametre("quotas.photos_de_table", 5)),
+        max_envois=int(config.parametre("quotas.uploads_table", 10)),
+        max_suppressions=int(config.parametre("quotas.suppressions_table", 5)),
+    )
+
+
+def enluminures(table_uuid: str) -> list[Photo]:
+    """Les enluminures vivantes de cette table, la plus récente en tête."""
+    with bd.Seance() as seance:
+        return list(seance.scalars(
+            select(Photo).where(Photo.table_uuid == table_uuid,
+                                Photo.portee == "table",
+                                Photo.supprimee.is_(False))
+            .order_by(Photo.creee_le.desc())))
+
+
 def maximum_depots() -> int:
     depots = config.parametre("quotas.photo_par_personne", DEPOTS_PAR_DEFAUT)
     modifs = config.parametre("quotas.modifications_photo",
@@ -203,7 +276,7 @@ def verifier(octets: bytes) -> str:
 
 
 def deposer(personne_uuid: str, octets: bytes, est_test: bool = False,
-            sans_consommer: bool = False) -> Photo:
+            sans_consommer: bool = False, table_uuid: str | None = None) -> Photo:
     """Écrit l'original, journalise, met la conversion en file. Rend la main.
 
     `EX-PHO-10` — l'application répond immédiatement. La conversion, le
@@ -213,15 +286,25 @@ def deposer(personne_uuid: str, octets: bytes, est_test: bool = False,
     forme = verifier(octets)
 
     with bd.Seance() as seance:
-        etat_budget = _budget(seance, personne_uuid)
         # EX-ADM-10 — l'administrateur agit sans limite. Il passe par la MÊME
         # fonction : un second chemin de dépôt divergerait du premier au
         # prochain changement de règle, et c'est celui qu'on relit le moins
-        # qui garderait l'ancienne.
-        if etat_budget.epuise and not sans_consommer:
-            raise RefusPhoto(
-                "Vous avez utilisé tous vos changements de photo. "
-                "Celle-ci est la vôtre.")
+        # qui garderait l'ancienne. Même raison pour la portée `table` :
+        # l'enluminure suit le chemin de la photo personnelle, seuls le budget
+        # et la ligne de journal diffèrent.
+        if table_uuid is not None:
+            etat_table = _budget_table(seance, table_uuid)
+            if not etat_table.peut_deposer and not sans_consommer:
+                raise RefusPhoto(
+                    "Votre table a ses cinq enluminures."
+                    if etat_table.affichees >= etat_table.max_affichees
+                    else "Vous avez utilisé vos dix envois pour cette table.")
+        else:
+            etat_budget = _budget(seance, personne_uuid)
+            if etat_budget.epuise and not sans_consommer:
+                raise RefusPhoto(
+                    "Vous avez utilisé tous vos changements de photo. "
+                    "Celle-ci est la vôtre.")
 
         identifiant = str(_uuid.uuid4())
         # Le nom du fichier se dérive de l'UUID. Mesuré au morceau A : les noms
@@ -232,28 +315,45 @@ def deposer(personne_uuid: str, octets: bytes, est_test: bool = False,
         chemin.parent.mkdir(parents=True, exist_ok=True)
         chemin.write_bytes(octets)
 
-        ancienne = seance.scalar(
-            select(Photo).where(Photo.personne_uuid == personne_uuid,
-                                Photo.portee == "personnelle",
-                                Photo.supprimee.is_(False)))
-        if ancienne is not None:
-            ancienne.supprimee = True
-            ancienne.supprimee_le = config.maintenant()
+        # EX-CDT-15 — une table porte CINQ enluminures ; une personne porte UNE
+        # photo. Le remplacement automatique n'a donc de sens que pour la
+        # seconde : côté table, on ajoute, et l'on supprime à la main.
+        ancienne = None
+        if table_uuid is None:
+            ancienne = seance.scalar(
+                select(Photo).where(Photo.personne_uuid == personne_uuid,
+                                    Photo.portee == "personnelle",
+                                    Photo.supprimee.is_(False)))
+            if ancienne is not None:
+                ancienne.supprimee = True
+                ancienne.supprimee_le = config.maintenant()
 
         photo = Photo(
             uuid=identifiant,
             personne_uuid=personne_uuid,
-            portee="personnelle",
+            table_uuid=table_uuid,
+            portee="table" if table_uuid else "personnelle",
             est_test=est_test,
             chemin_original=relatif,
             etat="traitement",
         )
         seance.add(photo)
-        bd.journaliser(
-            seance, Journal.PHOTO_DEPOSEE, objet_uuid=identifiant,
-            objet_type="photo", acteur=personne_uuid,
-            details={"forme": forme, "octets": len(octets),
-                     "remplace": ancienne.uuid if ancienne else None})
+        # Le budget de table s'ancre sur la TABLE, celui de la personne sur la
+        # personne : le rôle peut changer de main, le budget appartient à la
+        # table. Compter sur l'acteur ferait repartir le compte à zéro le jour
+        # où l'administrateur désigne un autre Gardien.
+        if table_uuid:
+            bd.journaliser(
+                seance, Journal.ENLUMINURE_DEPOSEE, objet_uuid=table_uuid,
+                objet_type="table", acteur=personne_uuid,
+                details={"photo": identifiant, "forme": forme,
+                         "octets": len(octets)})
+        else:
+            bd.journaliser(
+                seance, Journal.PHOTO_DEPOSEE, objet_uuid=identifiant,
+                objet_type="photo", acteur=personne_uuid,
+                details={"forme": forme, "octets": len(octets),
+                         "remplace": ancienne.uuid if ancienne else None})
         seance.commit()
         seance.refresh(photo)
 
@@ -400,10 +500,20 @@ def marquer_echec(photo_uuid: str, erreur: str) -> None:
         if photo is None or photo.etat == "echouee":
             return
         photo.etat = "echouee"
-        bd.journaliser(
-            seance, Journal.PHOTO_ECHOUEE, objet_uuid=photo_uuid,
-            objet_type="photo", acteur=photo.personne_uuid,
-            details={"erreur": erreur[:300]})
+        # **Le crédit doit revenir au budget qui a payé.** Une enluminure
+        # créditée sur la personne offrirait un dépôt de photo personnelle au
+        # Gardien et en retirerait un à sa table — faux dans les deux sens, et
+        # silencieux. Le sujet d'un budget n'est pas toujours celui qui agit.
+        if photo.portee == "table" and photo.table_uuid:
+            bd.journaliser(
+                seance, Journal.ENLUMINURE_ECHOUEE, objet_uuid=photo.table_uuid,
+                objet_type="table", acteur=photo.personne_uuid,
+                details={"photo": photo_uuid, "erreur": erreur[:300]})
+        else:
+            bd.journaliser(
+                seance, Journal.PHOTO_ECHOUEE, objet_uuid=photo_uuid,
+                objet_type="photo", acteur=photo.personne_uuid,
+                details={"erreur": erreur[:300]})
         seance.commit()
 
 

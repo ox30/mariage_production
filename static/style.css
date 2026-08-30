@@ -269,6 +269,32 @@ input[type="text"]:focus, textarea:focus {
   border: 1px solid var(--ardoise-clair);
 }
 
+/* Le bandeau du Gardien. Il remplace un carton qu'on remettait en main
+   propre : il doit se voir sans crier, sur tous ses écrans. */
+.bandeau-gardien {
+  border: 1px solid var(--laiton);
+  border-radius: 0.3rem;
+  padding: 0.6rem 0.9rem;
+  margin: 0 0 1.2rem;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.grille-enluminures {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  gap: 0.6rem;
+  margin: 1rem 0 0;
+}
+
+.enluminure { margin: 0; }
+.enluminure img {
+  width: 100%;
+  border-radius: 0.3rem;
+  border: 1px solid var(--ardoise-clair);
+  display: block;
+}
+
 .vignette {
   display: block;
   width: 100%;

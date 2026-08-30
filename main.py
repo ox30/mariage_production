@@ -731,7 +731,13 @@ def _suite_pour(request: Request, personne, intention: str,
                     "choisissez « Créer mon personnage ».", safe=""),
             status_code=303)
     else:
-        reponse = _ecran_questionnaire(request, personne)
+        if bd.table_gardee(personne.uuid) is not None:
+            # On annonce, on ne détourne pas : « Suivant » mène au même
+            # questionnaire que pour les autres.
+            reponse = RedirectResponse(f"/gardien-avant/{personne.uuid}",
+                                       status_code=303)
+        else:
+            reponse = _ecran_questionnaire(request, personne)
 
     appareil = identite.du_requete(request) or identite.nouveau()
     bd.rattacher_appareil(appareil, personne.uuid)
@@ -902,7 +908,8 @@ def _contexte_portrait(request: Request, ligne) -> dict:
                 # dans cette fenêtre, sinon il renvoie — et un renvoi consomme
                 # une modification (EX-PHO-37). Le silence brûlait du budget.
                 "photo": photos.courante(ligne.personne_uuid),
-                "budget_photo": photos.budget(ligne.personne_uuid)}
+                "budget_photo": photos.budget(ligne.personne_uuid),
+                **_contexte_gardien(ligne)}
     if ligne.etat in ("en_attente", "en_cours"):
         contexte["position"] = taches.position(ligne.uuid)
         contexte["attente_s"] = taches.attente_estimee_s(ligne.uuid)
@@ -1030,7 +1037,10 @@ def _apres_le_portrait(ligne) -> str:
     « Plus tard ». *Constaté en production le 26 août.*
     """
     if photos.courante(ligne.personne_uuid) is not None:
-        return "/fin"
+        # EX-CDT-18 — le Gardien est rappelé à sa charge avant de partir. Le
+        # rappel passe APRÈS la photo : une seule chose à la fois.
+        return (f"/gardien/{ligne.uuid}"
+                if bd.table_gardee(ligne.personne_uuid) else "/fin")
     return f"/photo/{ligne.uuid}"
 
 
@@ -1162,6 +1172,157 @@ def vignette_photo(identifiant: str):
         raise HTTPException(status_code=404, detail="Aucune vignette")
     return FileResponse(chemin, media_type="image/jpeg",
                         headers=EN_TETES_PHOTO)
+
+
+# --------------------------------------------------------------------------- #
+# Le Gardien des chroniques perdues (EX-CDT-12 à EX-CDT-19)
+# --------------------------------------------------------------------------- #
+
+def _contexte_gardien(ligne) -> dict:
+    """De quoi poser le bandeau, sur n'importe quel écran du parcours.
+
+    Depuis qu'EX-AUTH-08 a été réécrite, le rôle ne s'annonce plus par un
+    carton remis en main propre : il arrive en silence, sur un téléphone, et
+    seulement si la personne ouvre l'application. Le bandeau est ce qui
+    remplace le carton — il doit donc être visible partout, pas seulement là
+    où l'on capture.
+    """
+    table = bd.table_gardee(ligne.personne_uuid)
+    return {"table_gardee": table,
+            "gardien_sans_table": bd.est_gardien_sans_table(ligne.personne_uuid)}
+
+
+@app.get("/questionnaire/{personne_uuid}", response_class=HTMLResponse)
+def ecran_questionnaire_direct(request: Request, personne_uuid: str):
+    """Le questionnaire, atteignable par son adresse.
+
+    Il n'existait que rendu au vol par `/identite/choisir`, donc impossible à
+    reprendre après un détour — et le Gardien en fait un, puisqu'on lui annonce
+    sa charge avant. La capacité est l'UUID de la personne, celui-là même que
+    le formulaire poste déjà à `/valider`, qui reste seul à décider (EX-IA-26).
+    """
+    personne = bd.personne(personne_uuid)
+    if personne is None:
+        return RedirectResponse("/identite?intention=creer", status_code=303)
+    chronique = bd.chronique_de_personne(personne.uuid)
+    if chronique:
+        return RedirectResponse(f"/portrait/{chronique}", status_code=303)
+    return _ecran_questionnaire(request, personne)
+
+
+@app.get("/gardien-avant/{personne_uuid}", response_class=HTMLResponse)
+def annonce_gardien_avant(request: Request, personne_uuid: str):
+    """« Vous êtes le Gardien de la table X », juste après s'être reconnu.
+
+    Une page à part et non un bandeau de plus : c'est la seule fois où on peut
+    être sûr qu'il la lit, puisqu'il faut la traverser pour continuer.
+    """
+    personne = bd.personne(personne_uuid)
+    table = None if personne is None else bd.table_gardee(personne_uuid)
+    if table is None:
+        return RedirectResponse("/", status_code=303)
+    return gabarits.TemplateResponse(
+        "gardien_annonce.html",
+        {"request": request, "p": personne, "table": table, "budget": None,
+         "apres_portrait": False,
+         "suite": f"/questionnaire/{personne_uuid}"})
+
+
+@app.get("/enluminures/{identifiant}", response_class=HTMLResponse)
+def ecran_enluminures(request: Request, identifiant: str):
+    """EX-CDT-13 — l'écran de capture du Gardien, et de lui seul.
+
+    EX-CDT-16 : aucun droit sur les objets d'autrui. L'adresse porte l'UUID de
+    SA chronique, et le rôle est revérifié ici — le bouton absent ne suffit
+    pas, une adresse se recopie.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    table = bd.table_gardee(ligne.personne_uuid)
+    if table is None:
+        # Dire pourquoi, plutôt qu'une page vide ou un 404 qui laisserait
+        # croire à une faute de frappe.
+        return gabarits.TemplateResponse(
+            "enluminures.html",
+            {"request": request, "p": ligne, "table": None,
+             "sans_table": bd.est_gardien_sans_table(ligne.personne_uuid),
+             "budget": None, "enluminures": [],
+             "taille_max": photos.TAILLE_MAX_OCTETS},
+            status_code=403)
+    reponse = gabarits.TemplateResponse(
+        "enluminures.html",
+        {
+            "request": request, "p": ligne, "table": table, "sans_table": False,
+            "budget": photos.budget_table(table.uuid),
+            "enluminures": photos.enluminures(table.uuid),
+            "taille_max": photos.TAILLE_MAX_OCTETS,
+        },
+    )
+    reponse.headers["Content-Security-Policy"] = CSP_AVEC_BLOB
+    return reponse
+
+
+@app.post("/enluminures/{identifiant}")
+async def deposer_enluminure(identifiant: str,
+                             fichier: UploadFile = File(...)):
+    ligne = _chronique_ou_404(identifiant)
+    table = bd.table_gardee(ligne.personne_uuid)
+    if table is None:
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas Gardien")
+    octets = await fichier.read()
+    try:
+        photo = photos.deposer(ligne.personne_uuid, octets,
+                               est_test=bool(ligne.est_test),
+                               table_uuid=table.uuid)
+    except photos.RefusPhoto as refus:
+        return JSONResponse({"refus": str(refus)}, status_code=422)
+    return JSONResponse({"photo": photo.uuid, "etat": photo.etat})
+
+
+@app.get("/enluminure/{identifiant}/{photo_uuid}")
+def vignette_enluminure(identifiant: str, photo_uuid: str):
+    """Une enluminure de SA table, servie depuis le volume.
+
+    Deux contrôles, pas un : le rôle **et** l'appartenance de la photo à la
+    table gardée. Sans le second, un Gardien pourrait lire les enluminures
+    d'une autre table en changeant un UUID — EX-CDT-16 ne veut aucun droit sur
+    les objets d'autrui, et une table n'est pas moins « autrui » qu'une
+    personne.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    table = bd.table_gardee(ligne.personne_uuid)
+    if table is None:
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas Gardien")
+    with bd.Seance() as seance:
+        photo = seance.get(modeles.Photo, photo_uuid)
+        relatif = photo.chemin_vignette if photo is not None else None
+        appartient = (photo is not None and photo.portee == "table"
+                      and photo.table_uuid == table.uuid
+                      and not photo.supprimee)
+    if not appartient or not relatif:
+        raise HTTPException(status_code=404, detail="Aucune enluminure")
+    chemin = (config.projet().dossier_medias / "photos_invites" / "vignettes"
+              / relatif)
+    if not chemin.is_file():
+        raise HTTPException(status_code=404, detail="Aucune enluminure")
+    return FileResponse(chemin, media_type="image/jpeg",
+                        headers=EN_TETES_PHOTO)
+
+
+@app.get("/gardien/{identifiant}", response_class=HTMLResponse)
+def annonce_gardien(request: Request, identifiant: str):
+    """Le rappel après « C'est bien moi » (EX-CDT-18).
+
+    L'objectif des cinq est annoncé sur le carton de table ; ceci est le
+    moment où celui qui le porte apprend que c'est lui.
+    """
+    ligne = _chronique_ou_404(identifiant)
+    table = bd.table_gardee(ligne.personne_uuid)
+    if table is None:
+        return RedirectResponse("/fin", status_code=303)
+    return gabarits.TemplateResponse(
+        "gardien_annonce.html",
+        {"request": request, "p": ligne, "table": table,
+         "budget": photos.budget_table(table.uuid), "apres_portrait": True})
 
 
 @app.get("/fin", response_class=HTMLResponse)

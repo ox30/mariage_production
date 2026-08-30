@@ -1319,3 +1319,43 @@ def marquer_en_attente(identifiant: str) -> None:
         if chronique is not None and chronique.etat != "en_cours":
             chronique.etat = "en_attente"
             seance.commit()
+
+
+def table_gardee(personne_uuid: str) -> TableGroupe | None:
+    """La table dont cette personne est Gardien, ou rien (EX-CDT-12).
+
+    Le rôle se **dérive** de `est_responsable`, semé par l'import depuis le
+    tableur — jamais d'un code séparé. Deux endroits qui déclareraient qui
+    garde quoi divergeraient au premier réimport.
+
+    Trois conditions, et la deuxième est un garde-fou de données :
+
+    1. `est_responsable` ;
+    2. **pas `est_marie`** — une coche qui traîne dans le tableur ferait du
+       marié le Gardien de sa propre table, et il se mariera ce soir-là. Le
+       défaut sûr est celui qui protège quand on oublie ;
+    3. une table — une personne créée en saisie libre n'en a pas, et le rôle
+       disparaîtrait en silence. L'appelant doit pouvoir le dire.
+    """
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        if personne is None or not personne.est_responsable:
+            return None
+        if personne.est_marie:
+            return None
+        # `seance.get(TableGroupe, None)` rend None de lui-même : ce contrôle
+        # est donc REDONDANT, et gardé exprès. Il dit l'intention — « sans
+        # table, pas de rôle » — au lieu de la faire dépendre d'un
+        # comportement de l'ORM qu'une version pourrait changer en levée.
+        # Une mutation ne le fait pas tomber, et c'est le bon résultat.
+        if not personne.table_uuid:
+            return None
+        return seance.get(TableGroupe, personne.table_uuid)
+
+
+def est_gardien_sans_table(personne_uuid: str) -> bool:
+    """Désigné Gardien, mais sans table : à dire, jamais à taire."""
+    with Seance() as seance:
+        personne = seance.get(Personne, personne_uuid)
+        return bool(personne is not None and personne.est_responsable
+                    and not personne.est_marie and not personne.table_uuid)

@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block titre %}Les enluminures perdues{% endblock %}
+{% block corps %}
+<div class="enveloppe">
+{% if table is none %}
+  <h1>Ce n'est pas votre office</h1>
+  {% if sans_table %}
+    <p class="alerte">Vous êtes désigné Gardien, mais aucune table ne vous est
+       rattachée. Sans table, les enluminures n'ont nulle part où aller.
+       Signalez-le à l'accueil.</p>
+  {% else %}
+    <p>Cette page est celle du Gardien des chroniques perdues. Vous n'avez pas
+       cette charge — et c'est très bien ainsi.</p>
+  {% endif %}
+  <a class="action sobre" href="/portrait/{{ p.uuid }}">Revenir à votre
+    chronique</a>
+
+{% else %}
+  <p class="surtitre">Table {{ table.nom or table.code }}</p>
+  <h1>Les enluminures perdues</h1>
+
+  {# EX-CDT-15 — les trois compteurs en en-tête. Ils s'emboîtent : cinq
+     affichées plus cinq suppressions font dix envois, donc les trois lient en
+     même temps. Les montrer ensemble évite de découvrir le second en butant
+     dessus. #}
+  <p class="quittance">
+    <strong>{{ budget.affichees }} sur {{ budget.max_affichees }}</strong>
+    retrouvée{{ "s" if budget.affichees > 1 else "" }}.
+    {% if budget.restantes %}Il en manque {{ budget.restantes }}.{% else %}
+      Le compte y est.{% endif %}
+  </p>
+  <p class="discret">
+    {{ budget.envois }} envoi{{ "s" if budget.envois > 1 else "" }} sur
+    {{ budget.max_envois }} ·
+    {{ budget.suppressions }} suppression{{ "s" if budget.suppressions > 1 else "" }}
+    sur {{ budget.max_suppressions }}
+  </p>
+
+  {% if budget.peut_deposer %}
+    {# EX-CDT-19 — chez le Gardien, l'appareil est « la boîte à capturer les
+       dessins ». Le terme n'existe que dans son parcours : l'invité
+       ordinaire, lui, fait tirer son portrait. #}
+    <div id="choix_source">
+      <p><label class="action" style="display:block;text-align:center">
+        Ouvrir la boîte à capturer les dessins
+        <input type="file" accept="image/*" capture="environment" hidden
+               id="entree_capture"></label></p>
+      <p><label class="action sobre" style="display:block;text-align:center">
+        Choisir une image déjà prise
+        <input type="file" accept="image/*" hidden
+               id="entree_galerie"></label></p>
+    </div>
+
+    {# EX-PHO-26 — deux temps : rien n'est envoyé avant « Valider ». #}
+    <div id="etape_validation" hidden>
+      <img id="apercu" alt="L'enluminure, avant envoi"
+           style="max-width:100%;border-radius:0.3rem;display:block;
+                  margin:0 0 1rem">
+      <p id="refus" class="alerte" hidden></p>
+      <button class="action" type="button" id="valider">
+        Ajouter cette enluminure</button>
+      <p style="text-align:center;margin-top:0.6rem">
+        <a href="#" id="reprendre">Choisir une autre image</a></p>
+      {# EX-PHO-15 — la jauge s'affiche DÈS l'envoi et non au premier
+         événement : 593 ko n'en ont produit qu'un seul au morceau A. #}
+      <progress id="jauge" value="0" max="100" hidden
+                style="width:100%;margin-top:0.8rem"></progress>
+      <p id="etat" class="discret" aria-live="polite"></p>
+    </div>
+  {% else %}
+    <p class="discret">
+      {% if budget.affichees >= budget.max_affichees %}
+        Votre table a ses {{ budget.max_affichees }} enluminures. Pour en
+        changer une, il faudra d'abord en retirer une.
+      {% else %}
+        Vous avez utilisé vos {{ budget.max_envois }} envois pour cette table.
+      {% endif %}
+    </p>
+  {% endif %}
+
+  {% if enluminures %}
+    <hr>
+    <div class="grille-enluminures">
+      {% for e in enluminures %}
+        <figure class="enluminure">
+          {% if e.chemin_vignette %}
+            {# `?v=` : sans empreinte, l'URL ne change pas d'une image à
+               l'autre et le navigateur rend la précédente. #}
+            <img src="/enluminure/{{ p.uuid }}/{{ e.uuid }}?v={{ e.uuid[:12] }}"
+                 alt="Enluminure">
+          {% elif e.etat == "traitement" %}
+            <figcaption class="vigilance">Arrivée. Le Conseil la prépare.</figcaption>
+          {% else %}
+            <figcaption class="alerte">N'a pas pu être préparée — cela ne vous
+              a rien coûté.</figcaption>
+          {% endif %}
+        </figure>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <p class="discret" style="margin-top:1.5rem;text-align:center">
+    <a href="/portrait/{{ p.uuid }}">Revenir à votre chronique</a></p>
+{% endif %}
+</div>
+
+{% if table is not none and budget.peut_deposer %}
+<script>
+(function () {
+  var MAX = {{ taille_max }};
+  var choix = document.getElementById("choix_source");
+  var etape = document.getElementById("etape_validation");
+  var apercu = document.getElementById("apercu");
+  var refus = document.getElementById("refus");
+  var valider = document.getElementById("valider");
+  var jauge = document.getElementById("jauge");
+  var etat = document.getElementById("etat");
+  var retenu = null;
+
+  function montrer(fichier) {
+    retenu = fichier;
+    refus.hidden = true;
+    valider.disabled = false;
+    if (fichier.size > MAX) {
+      refus.textContent = "Cette image fait "
+        + (fichier.size / 1048576).toFixed(1) + " Mo, et la limite est de "
+        + Math.round(MAX / 1048576) + " Mo. Choisissez-en une autre.";
+      refus.hidden = false;
+      valider.disabled = true;
+    }
+    apercu.src = URL.createObjectURL(fichier);
+    choix.hidden = true;
+    etape.hidden = false;
+  }
+
+  ["entree_capture", "entree_galerie"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", function (e) {
+      if (e.target.files && e.target.files[0]) { montrer(e.target.files[0]); }
+    });
+  });
+  document.getElementById("reprendre").addEventListener("click", function (e) {
+    e.preventDefault();
+    retenu = null;
+    etape.hidden = true;
+    choix.hidden = false;
+  });
+
+  valider.addEventListener("click", function () {
+    if (!retenu) { return; }
+    valider.disabled = true;
+    var donnees = new FormData();
+    donnees.append("fichier", retenu);
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/enluminures/{{ p.uuid }}");
+    jauge.hidden = false;
+    jauge.value = 0;
+    etat.textContent = "Envoi en cours…";
+    xhr.upload.onprogress = function (e) {
+      if (e.lengthComputable) { jauge.value = (e.loaded / e.total) * 100; }
+    };
+    xhr.onload = function () {
+      jauge.hidden = true;
+      if (xhr.status === 200) { window.location.reload(); return; }
+      var message = "L'envoi n'a pas abouti. Vous pouvez réessayer.";
+      try { message = JSON.parse(xhr.responseText).refus || message; }
+      catch (err) { /* réponse non JSON : message générique */ }
+      etat.textContent = "";
+      refus.textContent = message;
+      refus.hidden = false;
+      valider.disabled = false;
+    };
+    xhr.onerror = function () {
+      jauge.hidden = true;
+      etat.textContent = "";
+      refus.textContent = "Connexion perdue — vérifiez votre réseau mobile, "
+        + "puis appuyez de nouveau.";
+      refus.hidden = false;
+      valider.disabled = false;
+    };
+    xhr.send(donnees);
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

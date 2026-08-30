@@ -449,6 +449,14 @@ class Journal(_CleUUID, Base):
     # le portrait reflète encore les réponses. Noyée dans `CHRONIQUE_MODIFIEE`,
     # corriger une virgule du portrait lèverait le drapeau.
     REPONSES_MODIFIEES = "reponses_modifiees"
+
+    # EX-CDT-14 — les trois budgets du Gardien. Ancrés sur la TABLE et non sur
+    # la personne : le rôle peut changer de main en cours de soirée, et le
+    # budget appartient à la table, pas à celui qui la garde à cet instant.
+    ENLUMINURE_DEPOSEE = "enluminure_deposee"
+    ENLUMINURE_RETIREE = "enluminure_retiree"
+    ENLUMINURE_ECHOUEE = "enluminure_echouee"
+    ENLUMINURE_CREDITEE = "enluminure_creditee"
     CHRONIQUE_SUPPRIMEE = "chronique_supprimee"
     CHRONIQUE_RESTAUREE = "chronique_restauree"
     # Actions écrites en chaîne libre depuis les étapes 1 et 2, promues en

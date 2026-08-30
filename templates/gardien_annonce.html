@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block titre %}Gardien des chroniques perdues{% endblock %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Table {{ table.nom or table.code }}</p>
+  <h1>Vous êtes le Gardien des chroniques perdues</h1>
+
+  {# EX-CDT-18 — l'objectif est annoncé sur le carton de table pour que la
+     table entière connaisse le but ; ceci est le moment où celui qui le porte
+     apprend que c'est lui. Depuis qu'EX-AUTH-08 a été réécrite, le rôle
+     n'arrive plus par un carton remis en main propre. #}
+  <p>Cinq enluminures se sont perdues entre les pages du Livre. À vous de les
+     retrouver&nbsp;: cinq images, prises à votre table, qui rejoindront la fin
+     de l'ouvrage.</p>
+
+  {% if budget %}
+    <p class="discret">Il vous en manque {{ budget.restantes }} sur
+       {{ budget.max_affichees }}.</p>
+  {% endif %}
+
+  {% if apres_portrait %}
+    <a class="action" href="/enluminures/{{ p.uuid }}">Retrouver les
+      enluminures</a>
+    <p class="discret" style="text-align:center;margin-top:0.6rem">
+      <a href="/fin">Plus tard</a></p>
+  {% else %}
+    {# Avant le questionnaire : on annonce, on ne détourne pas. Son
+       questionnaire est celui d'un invité ordinaire (EX-CDT-16). #}
+    <p class="discret">Ce sera pour tout à l'heure. D'abord, le Conseil a
+       sept questions pour vous.</p>
+    <a class="action" href="{{ suite }}">Suivant</a>
+  {% endif %}
+</div>
+{% endblock %}

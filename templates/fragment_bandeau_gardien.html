@@ -1,0 +1,14 @@
+{# Le bandeau qui suit le Gardien tout au long du parcours. Il remplace le
+   carton qu'on lui remettait en main propre avant qu'EX-AUTH-08 ne soit
+   réécrite : sans lui, personne ne saurait qu'il l'est. #}
+{% if table_gardee %}
+  <p class="bandeau-gardien">
+    Vous êtes le <strong>Gardien</strong> de la table
+    {{ table_gardee.nom or table_gardee.code }} ·
+    <a href="/enluminures/{{ p.uuid }}">les enluminures</a>
+  </p>
+{% elif gardien_sans_table %}
+  {# Désigné Gardien mais sans table : le dire, jamais le taire. #}
+  <p class="alerte">Vous êtes désigné Gardien, mais aucune table ne vous est
+     rattachée. Signalez-le à l'accueil.</p>
+{% endif %}

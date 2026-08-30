@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block titre %}Votre chronique{% endblock %}
+{% block corps %}
+{# htmx est servi depuis le volume de l'image et non depuis unpkg : le
+   rafraîchissement du portrait est FONCTIONNEL, pas décoratif, et cent
+   téléphones en 4G qui dépendraient d'un CDN tiers auraient un point de
+   panne de plus sur le chemin critique. Une résolution DNS de moins. #}
+<script src="/static/htmx.min.js?v={{ empreinte_htmx }}"></script>
+<div class="enveloppe">
+  <div id="zone-portrait">
+    {% include "fragment_portrait.html" %}
+  </div>
+</div>
+{% endblock %}

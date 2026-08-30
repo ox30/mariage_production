@@ -1,0 +1,76 @@
+# EX-SEC-17 — le Dockerfile fait `COPY . .`. Un dépôt irréprochable peut
+# produire une image qui embarque une clé d'API ou une base de test :
+# EX-SEC-06 ne couvre que le dépôt, pas l'image.
+#
+# ATTENTION — ce fichier n'obéit pas aux règles de `.gitignore`. Docker
+# normalise chaque motif et l'ancre à la racine du contexte de build :
+# `__pycache__/` n'attrape donc pas `templates/__pycache__`. Les motifs qui
+# protègent un secret sont écrits sous les deux formes, à la racine et en
+# `**/`, pour qu'aucune subtilité de syntaxe ne décide de leur portée.
+#
+# Liste d'exclusion, et non liste d'inclusion, conformément à la formulation
+# d'EX-SEC-17. Contrepartie assumée : un nouveau type de fichier sensible ne
+# serait pas couvert d'office. Une liste d'inclusion l'aurait couvert, mais
+# tout module oublié aurait alors fait échouer le démarrage sur Railway — et
+# le gel des déploiements (EX-SAU-09) interdit de corriger le 5 septembre.
+
+# --- Secrets ---------------------------------------------------------------
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+
+# --- Bases de données ------------------------------------------------------
+# Une base de développement copiée dans l'image serait masquée par le volume
+# monté sur /data — donc invisible, donc jamais découverte.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite3
+
+# --- Historique et métadonnées ---------------------------------------------
+.git
+.gitignore
+.github
+
+# --- Tests -----------------------------------------------------------------
+# Exclus délibérément, pour une raison de sûreté et non de taille d'image :
+# `test_parcours.py` crée trente participations, et sur Railway `/data` existe.
+# Lancé par mégarde dans le conteneur de production, il écrirait dans la base
+# réelle. Absent de l'image, le geste devient impossible.
+test_*.py
+
+# --- Volume et sorties d'exécution ----------------------------------------
+/data
+instantanes
+exports
+logs
+**/*.log
+
+# --- Python ----------------------------------------------------------------
+**/__pycache__
+**/*.py[cod]
+.venv
+venv
+env
+**/*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# --- Postes de travail -----------------------------------------------------
+.vscode
+.idea
+**/Thumbs.db
+**/desktop.ini
+**/.DS_Store
+
+# Repli de développement de config.py.
+donnees-locales

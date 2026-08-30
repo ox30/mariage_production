@@ -1,0 +1,96 @@
+# ============================================================================
+#  CE FICHIER N'EST JAMAIS LU PAR L'APPLICATION.
+#
+#  Le vrai config.yaml vit SUR LE VOLUME :  /data/projets/<dossier>/config.yaml
+#  Celui-ci n'en est que le MODÈLE, à recopier PUIS À MODIFIER.
+#
+#  Il porte volontairement « a-definir » partout où une valeur est à choisir,
+#  et le démarrage REFUSE cette valeur : c'est le filet qui attrape une recopie
+#  qu'on aurait oublié de modifier. Le filet et l'appât vont ensemble — ne
+#  jamais écrire ici la valeur réelle d'un projet.
+#
+#  Deux raisons. Le dépôt ne porte aucune valeur de projet réelle (EX-SEC-06).
+#  Et ce modèle servira à fabriquer le config.yaml de la PRODUCTION : s'il
+#  portait le mot de passe de la répétition, le mariage en hériterait par
+#  recopie, alors qu'il aura circulé pendant tous les essais.
+#
+#  Rien ne recopie automatiquement ce fichier vers le volume. Une copie faite
+#  une fois puis jamais rafraîchie a déjà fait tourner l'application des heures
+#  sur une configuration périmée, sans message d'erreur (EX-ARC-19). Le
+#  déploiement du dépôt ne touche jamais au volume.
+# ============================================================================
+#
+# ÉTAT — les blocs `projet:`, `acces:` (mot_de_passe), `ia:`, `worker:` et
+# `sauvegarde:` sont lus. `quotas:`, `tables:` et `table_test:` sont donnés
+# pour mémoire, conformément à la section 4.6 du cahier des charges ; ils
+# seront consommés plus loin dans l'étape 2. En cas de divergence, c'est la
+# section 4.6 qui fait foi.
+
+projet:
+  # PAS d'`identifiant` ici : le NOM DU DOSSIER fait autorité. Ce champ a
+  # existé, et il a causé un vrai défaut le 25 août — recopié depuis cet
+  # exemple, il a envoyé les sauvegardes sous un préfixe qui ne correspondait
+  # à aucun dossier. S'il est présent et diverge, le démarrage le signale.
+  nom: "Répétition générale"
+  date: 2026-09-05
+  # `preparation` ou `production`, IMMUABLE ensuite (EX-PRJ-04, EX-PRJ-05).
+  # Ce champ commande le refus des opérations destructives (EX-PRJ-06) : il n'a
+  # volontairement aucune valeur par défaut, parce qu'une valeur par défaut
+  # serait forcément la mauvaise dans un sens ou dans l'autre.
+  type: preparation
+  langue: fr
+
+# --- Blocs à venir, étape 2 -------------------------------------------------
+
+# Le mot de passe d'accès n'est pas haché : il est imprimé sur des cartons et
+# l'administrateur doit pouvoir le relire (EX-SEC-09). Un mot simple en
+# minuscules, saisissable au doigt dans une lumière tamisée (EX-AUTH-07).
+#
+# `a-definir` est REFUSÉE AU DÉMARRAGE. Un config.yaml recopié depuis cet
+# exemple et jamais relu est le mode de fabrication normal d'un fichier de
+# projet — c'est ce qui a envoyé les sauvegardes sous un préfixe orphelin le
+# 25 août. Laisser passer la valeur d'exemple ouvrirait la soirée à tous.
+acces:
+  mot_de_passe: "a-definir"
+
+# Les quotas sont des ALLOCATIONS. Aucun compteur de consommation n'est stocké :
+# les consommations se calculent depuis le journal (EX-GEN-07, EX-IA-21).
+quotas:
+  generations_par_personne: 3
+  photo_par_personne: 1
+  modifications_photo: 3
+  photos_de_table: 5
+  uploads_table: 10
+  suppressions_table: 5
+
+ia:
+  # Le modèle est un paramètre, pas une constante de code (EX-IA-20).
+  modele: claude-sonnet-5
+  # Borne, jamais facturée. Le compteur de jetons de sortie est sans rapport
+  # avec le nombre de mots visibles : raccourcir le portrait ne prévient pas la
+  # troncature, seul un plafond large le fait (EX-IA-34).
+  jetons_max: 8000
+  # Coupe-circuit de coût. ATTENTION : le plafond réel de l'API est propre au
+  # COMPTE, pas au service — des essais sur le banc consomment le même budget
+  # et les mêmes limites de débit que la production (EX-IA-18).
+  plafond_appels: 500
+
+worker:
+  # Relu à chaud toutes les 10 s : réglable en pleine soirée sans redéployer
+  # (EX-ARC-20), ce qu'EX-SAU-09 interdit précisément.
+  fils: 8
+
+sauvegarde:
+  # EX-SAU-19 — doublé chez deux fournisseurs distincts. Les identifiants sont
+  # en variables d'environnement (EX-SAU-22) ; seule cette liste est ici, pour
+  # retirer un dépôt devenu lent sans redéployer.
+  destinations: [railway, r2]
+
+tables:
+  nombre: 10
+
+# Table de test test_01 à test_10, qui reste ACTIVE dans le projet de
+# production pour le test de fumée du jour J (EX-PRJ-10, EX-TST-01).
+table_test:
+  active: true
+  utilisateurs: 10

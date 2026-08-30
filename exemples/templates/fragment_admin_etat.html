@@ -1,0 +1,36 @@
+{# Rafraîchi tant que le Conseil écrit. Le sondage s'ARRÊTE dès que l'état est
+   terminal : un fragment qui continuerait d'interroger toutes les deux
+   secondes sur une chronique prête tiendrait un fil occupé toute la soirée
+   pour ne rien apprendre. #}
+<div id="etat-generation">
+  {% if p.etat in ("en_attente", "en_cours") %}
+    <div hx-get="/admin/chronique/{{ p.uuid }}/etat" hx-trigger="every 2s"
+         hx-target="#etat-generation" hx-swap="outerHTML">
+      <p class="quittance"><strong>Le Conseil écrit.</strong>
+        {% if p.etat == "en_attente" %}
+          L'appel est en file — il part dès qu'un fil se libère.
+        {% else %}
+          L'appel est parti. Comptez une trentaine de secondes.
+        {% endif %}
+      </p>
+      <p class="discret">
+        tentative {{ p.nb_tentatives }} sur {{ max_tentatives }} ·
+        {{ p.nb_generations }} portrait(s) déjà reçu(s)
+      </p>
+    </div>
+  {% elif p.etat == "echouee" %}
+    {# EX-IA-22 — l'administrateur relance sans limite, même après l'échec. #}
+    <div class="alerte"><strong>La génération a échoué.</strong>
+      {{ p.derniere_erreur or "sans message" }}
+      <br><span class="discret">tentative {{ p.nb_tentatives }} sur
+      {{ max_tentatives }} — relancez depuis l'onglet Contrôle.</span></div>
+  {% else %}
+    <p class="discret">
+      État <strong>{{ p.etat }}</strong> ·
+      {{ p.nb_generations }} portrait(s) sur {{ max_generations }} ·
+      {{ p.nb_tentatives }} tentative(s) technique(s)
+      {% if p.duree_s %} · dernier appel {{ p.duree_s }} s
+        ({{ p.jetons_entree or 0 }}/{{ p.jetons_sortie or 0 }} jetons){% endif %}
+    </p>
+  {% endif %}
+</div>

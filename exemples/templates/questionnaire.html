@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+{% block titre %}{{ titre }}{% endblock %}
+{% block corps %}
+{% set reponses = reponses|default({}) %}
+{% set reprise = reprise|default(false) %}
+<div class="progression"><span id="jauge"></span></div>
+
+<form method="post" action="{{ action }}" id="formulaire">
+  {# L'identité voyage par son UUID et non par (prénom, nom) : deux homonymes
+     réels ne se distinguent que par lui, et reposter un nom rouvrirait la
+     résolution que l'écran d'identité vient de trancher. Le prénom reste, mais
+     pour l'affichage seul. #}
+  <input type="hidden" name="personne_uuid" value="{{ personne_uuid or '' }}">
+  <input type="hidden" name="genre" value="{{ genre }}">
+
+  <div class="enveloppe">
+  {% if reprise %}
+    {# Tout est déjà répondu : on ouvre sur le sommaire, d'où l'on saute
+       directement à la question qu'on veut corriger. #}
+    <section class="ecran actif" id="sommaire">
+      <p class="compteur-question">Vos réponses</p>
+      <p class="question">Touchez ce que vous voulez changer.</p>
+      <p class="exemple">Ce que vous ne touchez pas reste tel quel.</p>
+      <ul class="sommaire">
+      {% for q in questions %}
+        <li>
+          {# `.choix` est le composant du questionnaire : même fond, même
+             bordure, même hauteur de frappe. Le crayon doré dit que la ligne
+             se modifie, sans qu'il faille lire une consigne. #}
+          <button type="button" class="choix ligne-sommaire" data-vers="{{ q.cle }}"
+                  {% if q.condition %}data-condition-cle="{{ q.condition.cle }}"
+                  data-condition-valeur="{{ q.condition.valeur }}"{% endif %}>
+            <span class="intitule">{{ q.question }}</span>
+            <span class="valeur" id="apercu-{{ q.cle }}">{{ reponses.get(q.cle, "") }}</span>
+            <span class="crayon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 20h9"/>
+                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+              </svg>
+            </span>
+          </button>
+        </li>
+      {% endfor %}
+      </ul>
+      <input type="hidden" name="suite" id="champ-suite" value="maintenant">
+      <button type="submit" class="action envoi" data-suite="maintenant"
+              data-attente="Le Conseil délibère…">
+        Réécrire ma chronique
+        ({{ restantes }} restante{{ "s" if restantes > 1 else "" }})
+      </button>
+      <p class="discret">Réécrire consomme une réécriture, que vous ayez changé
+         une réponse ou non.</p>
+      {% if retour_vers %}
+        {# Rien de ce qui est modifié ici n'atteint la base avant l'envoi : les
+           corrections vivent dans le formulaire. Partir les abandonne, et le
+           libellé le dit plutôt que de laisser l'invité le deviner. #}
+        <a class="retour" href="{{ retour_vers }}">← Revenir sans rien changer</a>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% for q in questions %}
+    <section class="ecran{% if loop.first and not reprise %} actif{% endif %}"
+             data-index="{{ loop.index0 }}" data-cle-question="{{ q.cle }}"
+             {% if q.condition %}data-condition-cle="{{ q.condition.cle }}"
+             data-condition-valeur="{{ q.condition.valeur }}"{% endif %}>
+      <p class="compteur-question"></p>
+      <p class="question">{{ q.question }}</p>
+      {% if q.exemple %}<p class="exemple">{{ q.exemple }}</p>{% endif %}
+
+      <input type="hidden" name="{{ q.cle }}" id="champ-{{ q.cle }}"
+             value="{{ reponses.get(q.cle, '') }}">
+
+      {% if q.prealable %}
+        <input type="hidden" name="{{ q.prealable.cle }}" id="champ-{{ q.prealable.cle }}"
+               value="{{ reponses.get(q.prealable.cle, '') }}">
+        <p class="exemple" style="margin-bottom:0.6rem">{{ q.prealable.question }}</p>
+        {% for option in q.prealable.options %}
+          <button type="button" class="choix prealable{% if reponses.get(q.prealable.cle) == option %} retenu{% endif %}"
+                  data-cle="{{ q.prealable.cle }}"
+                  data-valeur="{{ option }}">{{ option }}</button>
+        {% endfor %}
+        <p style="margin:0 0 1rem"></p>
+      {% endif %}
+
+      {% if q.type == "boutons" %}
+        {% set libre = q.autre and reponses.get(q.cle)
+                       and reponses.get(q.cle) not in q.options %}
+        {% for option in q.options %}
+          <button type="button" class="choix{% if reponses.get(q.cle) == option %} retenu{% endif %}"
+                  data-cle="{{ q.cle }}"
+                  data-valeur="{{ option }}">{{ option }}</button>
+        {% endfor %}
+        {% if q.autre %}
+          {# EX-QUE-17 — le bouton reste le chemin par défaut : à 22 h, un verre
+             à la main, taper coûte dix fois plus que toucher. « Autre » se
+             place donc en dernier et discret.
+
+             C'est le SEUL bouton du questionnaire qui n'enchaîne pas — il
+             déplie un champ au lieu de passer à la suite. D'où la classe
+             `ouvre-libre` et l'aspect sobre : identique aux autres, il serait
+             vécu comme un bouton en panne.
+
+             Le texte saisi part sous la MÊME clé que les options : `ia.py` ne
+             change pas, `reponses_json` reste homogène, et la clé n'est pas
+             renommée — le banc d'essai reste compatible. #}
+          <button type="button" class="choix sobre ouvre-libre{% if libre %} retenu{% endif %}"
+                  data-cle="{{ q.cle }}"
+                  aria-expanded="{{ 'true' if libre else 'false' }}">{{ q.autre.libelle }}</button>
+          <div class="zone-libre" data-cle="{{ q.cle }}" {% if not libre %}hidden{% endif %}>
+            {% if q.autre.exemple %}<p class="exemple">{{ q.autre.exemple }}</p>{% endif %}
+            <input type="text" class="saisie-libre" data-cle="{{ q.cle }}"
+                   maxlength="{{ q.autre.limite | default(60) }}" autocomplete="off"
+                   value="{{ reponses.get(q.cle, '') if libre else '' }}">
+            <button type="button" class="action suivant-libre" disabled>
+              {% if reprise %}Garder cette réponse{% else %}Suivant{% endif %}
+            </button>
+          </div>
+        {% endif %}
+      {% elif q.type == "texte_long" %}
+        <textarea id="saisie-{{ q.cle }}" data-cle="{{ q.cle }}"
+                  maxlength="{{ q.limite }}">{{ reponses.get(q.cle, "") }}</textarea>
+        <p class="reste"><span id="reste-{{ q.cle }}">{{ q.limite }}</span> caractères</p>
+        <button type="button" class="action suivant" disabled>{% if reprise %}Garder cette réponse{% else %}Suivant{% endif %}</button>
+      {% else %}
+        <input type="text" id="saisie-{{ q.cle }}" data-cle="{{ q.cle }}"
+               maxlength="{{ q.limite }}" autocomplete="off"
+               value="{{ reponses.get(q.cle, '') }}">
+        <button type="button" class="action suivant" disabled>{% if reprise %}Garder cette réponse{% else %}Suivant{% endif %}</button>
+      {% endif %}
+
+      {% if reprise %}
+        <button type="button" class="retour" data-sommaire>← Sommaire</button>
+      {% elif not loop.first %}
+        <button type="button" class="retour" data-arriere>← Revenir</button>
+      {% elif facultatif %}
+        <button type="submit" class="retour envoi" data-suite="sortie">
+          Créer mon personnage sans ces questions
+        </button>
+      {% endif %}
+    </section>
+  {% endfor %}
+
+  {% if not reprise %}
+    <section class="ecran" data-index="{{ questions|length }}">
+      <p class="compteur-question">C'est tout</p>
+      <input type="hidden" name="suite" id="champ-suite" value="maintenant">
+      {% if bifurcation %}
+        <p class="question">Le Conseil peut délibérer.</p>
+        <p class="exemple">Ou vous pouvez en dire plus : {{ nb_bonus_mot }} questions de plus,
+           et votre chronique sera plus riche — les mariés auront davantage à
+           deviner.</p>
+        <button type="submit" class="action envoi" data-suite="maintenant"
+                data-attente="Le Conseil délibère…">
+          Créer mon personnage
+        </button>
+        <button type="submit" class="action sobre envoi" data-suite="bonus"
+                data-attente="Encore {{ nb_bonus_mot }} questions…">
+          {{ nb_bonus_mot|capitalize }} questions de plus
+        </button>
+      {% else %}
+        <p class="question">Le Conseil peut délibérer.</p>
+        <p class="exemple">Comptez une dizaine de secondes pour la réponse.</p>
+        <button type="submit" class="action envoi" data-suite="maintenant"
+                data-attente="Le Conseil délibère…">
+          Envoyer mes réponses
+        </button>
+      {% endif %}
+      <button type="button" class="retour" data-arriere>← Revenir</button>
+    </section>
+  {% endif %}
+  </div>
+</form>
+
+<script>
+(function () {
+  var facultatif = {{ "true" if facultatif else "false" }};
+  var reprise = {{ "true" if reprise else "false" }};
+  var ecrans = Array.prototype.slice.call(document.querySelectorAll(".ecran"));
+  var jauge = document.getElementById("jauge");
+  var courant = 0;
+
+  function estActif(section) {
+    var cle = section.dataset.conditionCle;
+    if (!cle) { return true; }
+    var champ = document.getElementById("champ-" + cle);
+    return champ && champ.value === section.dataset.conditionValeur;
+  }
+
+  function numeroter() {
+    // Le total dépend des réponses déjà données : un écran conditionnel écarté
+    // ne doit pas gonfler le décompte affiché.
+    var actifs = ecrans.filter(function (s) {
+      // Le sommaire de reprise n'est pas une question : le compter donnerait
+      // « 1 / 13 » pour douze questions, et décalerait toute la numérotation.
+      return estActif(s) && s.dataset.cleQuestion
+             && s.querySelector(".compteur-question");
+    });
+    var questions = actifs.filter(function (s) { return s.querySelector(".question"); });
+    questions.forEach(function (s, i) {
+      s.querySelector(".compteur-question").textContent = (i + 1) + " / " + questions.length;
+    });
+  }
+
+  function afficher(index) {
+    ecrans[courant].classList.remove("actif");
+    courant = index;
+    ecrans[courant].classList.add("actif");
+    jauge.style.width = (courant / (ecrans.length - 1) * 100) + "%";
+    numeroter();
+    if (reprise) { rafraichirSommaire(); }
+    window.scrollTo(0, 0);
+    var saisie = ecrans[courant].querySelector("input[type=text], textarea");
+    if (saisie) { saisie.focus(); }
+  }
+
+  function avancer() {
+    // En reprise, on ne fait pas retraverser les onze autres écrans : on
+    // revient au sommaire dès que plus rien n'attend de réponse. Un écran
+    // conditionnel qui vient de s'activer — l'allégeance passée à l'Ombre —
+    // est vide, donc il est proposé avant le retour.
+    if (reprise) {
+      for (var j = 0; j < ecrans.length; j++) {
+        var cle = ecrans[j].dataset.cleQuestion;
+        if (!cle || j === courant || !estActif(ecrans[j])) { continue; }
+        var champ = document.getElementById("champ-" + cle);
+        if (champ && !champ.value) { afficher(j); return; }
+      }
+      afficher(0);
+      return;
+    }
+    for (var i = courant + 1; i < ecrans.length; i++) {
+      if (estActif(ecrans[i])) { afficher(i); return; }
+    }
+  }
+
+  function reculer() {
+    for (var i = courant - 1; i >= 0; i--) {
+      if (estActif(ecrans[i])) { afficher(i); return; }
+    }
+  }
+
+  // Sélecteur préalable : on retient, on n'avance pas — le texte reste à écrire.
+  document.querySelectorAll(".prealable").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      var section = bouton.closest(".ecran");
+      section.querySelectorAll(".prealable").forEach(function (b) {
+        b.classList.remove("retenu");
+      });
+      bouton.classList.add("retenu");
+      document.getElementById("champ-" + bouton.dataset.cle).value = bouton.dataset.valeur;
+      var champ = section.querySelector("[id^=saisie-]");
+      if (champ) { champ.dispatchEvent(new Event("input")); }
+      // Sur un écran à boutons, le préalable renseigné après coup doit
+      // enchaîner : sinon l'invité reste bloqué sans bouton Suivant.
+      if (!champ && section.querySelector(".choix.retenu:not(.prealable)")) {
+        setTimeout(avancer, 220);
+      }
+    });
+  });
+
+  function nettoyerConditionnels() {
+    // Revenir en arrière et changer d'allégeance ne doit pas laisser traîner
+    // la réponse d'un écran qui ne s'affiche plus.
+    ecrans.forEach(function (section) {
+      if (!section.dataset.conditionCle || estActif(section)) { return; }
+      section.querySelectorAll("[data-cle]").forEach(function (b) {
+        b.classList.remove("retenu");
+        var champ = document.getElementById("champ-" + b.dataset.cle);
+        if (champ) { champ.value = ""; }
+      });
+    });
+  }
+
+  // « Autre » : le seul bouton qui ne passe PAS à la suite. Il déplie un champ
+  // et attend qu'on ait écrit — sans quoi on quitterait l'écran avec une
+  // réponse vide.
+  document.querySelectorAll(".ouvre-libre").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      var section = bouton.closest(".ecran");
+      section.querySelectorAll(".choix:not(.prealable)").forEach(function (b) {
+        b.classList.remove("retenu");
+      });
+      bouton.classList.add("retenu");
+      // Revenir sur une option referme le champ libre : le laisser ouvert
+      // ferait croire que ce qu'on y a tapé compte encore.
+      var libre = section.querySelector(".zone-libre");
+      if (libre) {
+        libre.hidden = true;
+        libre.querySelector(".saisie-libre").value = "";
+        section.querySelector(".ouvre-libre").setAttribute("aria-expanded", "false");
+      }
+      bouton.setAttribute("aria-expanded", "true");
+      var zone = section.querySelector(".zone-libre");
+      zone.hidden = false;
+      var saisie = zone.querySelector(".saisie-libre");
+      saisie.focus();
+      // La réponse est vidée à l'ouverture : l'option touchée juste avant
+      // resterait sinon enregistrée si l'invité change d'avis sans écrire.
+      document.getElementById("champ-" + bouton.dataset.cle).value = saisie.value.trim();
+      zone.querySelector(".suivant-libre").disabled = saisie.value.trim().length === 0;
+    });
+  });
+
+  document.querySelectorAll(".saisie-libre").forEach(function (saisie) {
+    var zone = saisie.closest(".zone-libre");
+    var valider = zone.querySelector(".suivant-libre");
+    function refleter() {
+      var valeur = saisie.value.trim();
+      document.getElementById("champ-" + saisie.dataset.cle).value = valeur;
+      valider.disabled = valeur.length === 0;
+    }
+    saisie.addEventListener("input", refleter);
+    saisie.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !valider.disabled) { e.preventDefault(); avancer(); }
+    });
+    valider.addEventListener("click", function () { if (!valider.disabled) avancer(); });
+  });
+
+  // Boutons de choix : on retient, on enchaîne. Un geste, pas deux.
+  document.querySelectorAll(".choix:not(.prealable):not(.ouvre-libre)").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      var section = bouton.closest(".ecran");
+      section.querySelectorAll(".choix:not(.prealable)").forEach(function (b) {
+        b.classList.remove("retenu");
+      });
+      bouton.classList.add("retenu");
+      document.getElementById("champ-" + bouton.dataset.cle).value = bouton.dataset.valeur;
+      nettoyerConditionnels();
+      if (section.querySelector(".prealable")
+          && !section.querySelector(".prealable.retenu")) { return; }
+      setTimeout(avancer, 220);
+    });
+  });
+
+  // Saisies libres : le bouton reste inerte tant que le champ est vide, et
+  // tant que le sélecteur préalable de l'écran n'est pas renseigné.
+  document.querySelectorAll("[data-cle][id^=saisie-]").forEach(function (champ) {
+    var section = champ.closest(".ecran");
+    var suivant = section.querySelector(".suivant");
+    var reste = document.getElementById("reste-" + champ.dataset.cle);
+    var prealable = section.querySelector(".prealable");
+    champ.addEventListener("input", function () {
+      var valeur = champ.value.trim();
+      document.getElementById("champ-" + champ.dataset.cle).value = valeur;
+      var manquePrealable = prealable
+        && !section.querySelector(".prealable.retenu");
+      suivant.disabled = facultatif ? false : (valeur.length === 0 || manquePrealable);
+      if (reste) { reste.textContent = champ.maxLength - champ.value.length; }
+    });
+    champ.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && champ.tagName === "INPUT" && !suivant.disabled) {
+        e.preventDefault();
+        avancer();
+      }
+    });
+    suivant.addEventListener("click", avancer);
+  });
+
+  document.querySelectorAll("[data-arriere]").forEach(function (bouton) {
+    bouton.addEventListener("click", reculer);
+  });
+
+  // --- Reprise : sauts depuis le sommaire, et retour vers lui --------------
+  document.querySelectorAll("[data-vers]").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      for (var i = 0; i < ecrans.length; i++) {
+        if (ecrans[i].dataset.cleQuestion === bouton.dataset.vers) {
+          afficher(i);
+          return;
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-sommaire]").forEach(function (bouton) {
+    bouton.addEventListener("click", function () { afficher(0); });
+  });
+
+  function rafraichirSommaire() {
+    // Le sommaire montre l'état courant, y compris les corrections non encore
+    // envoyées : sans cela, on ne saurait pas ce qu'on a déjà changé.
+    document.querySelectorAll("[data-vers]").forEach(function (bouton) {
+      var cle = bouton.dataset.vers;
+      var champ = document.getElementById("champ-" + cle);
+      var apercu = document.getElementById("apercu-" + cle);
+      if (apercu && champ) { apercu.textContent = champ.value; }
+      // Une question conditionnelle écartée n'a pas à figurer au sommaire.
+      var ligne = bouton.parentNode;
+      var condition = bouton.dataset.conditionCle;
+      if (condition) {
+        var pilote = document.getElementById("champ-" + condition);
+        var visible = pilote && pilote.value === bouton.dataset.conditionValeur;
+        ligne.style.display = visible ? "" : "none";
+      }
+    });
+  }
+
+  // Les champs arrivent déjà remplis : on rejoue l'événement de saisie pour
+  // que le compteur de caractères et l'état du bouton soient justes d'emblée.
+  document.querySelectorAll("[data-cle][id^=saisie-]").forEach(function (champ) {
+    if (champ.value) { champ.dispatchEvent(new Event("input")); }
+  });
+
+  // Un questionnaire facultatif se traverse sans rien écrire : le bouton est
+  // actif dès l'arrivée sur l'écran.
+  if (facultatif) {
+    document.querySelectorAll(".suivant").forEach(function (b) { b.disabled = false; });
+  }
+
+  // Le choix passe par un champ caché, pas par la valeur du bouton : un bouton
+  // désactivé n'envoie pas toujours sa valeur, et on désactive justement tout
+  // à l'envoi pour empêcher le double clic sur 4G.
+  document.querySelectorAll(".envoi").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      document.getElementById("champ-suite").value = bouton.dataset.suite;
+      if (bouton.dataset.attente) { bouton.textContent = bouton.dataset.attente; }
+    });
+  });
+
+  document.getElementById("formulaire").addEventListener("submit", function () {
+    document.querySelectorAll("#formulaire button[type=submit]").forEach(function (b) {
+      b.disabled = true;
+    });
+  });
+
+  afficher(0);
+})();
+</script>
+{% endblock %}

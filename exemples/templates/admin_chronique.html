@@ -1,0 +1,311 @@
+{% extends "admin_base.html" %}
+{% block panneau %}
+
+{# Deux niveaux de retour : la barre d'administration reste au-dessus (elle
+   vient d'`admin_base`), et ce fil d'Ariane ramène à la liste sans la
+   chercher. #}
+<p class="discret" style="margin:0 0 0.4rem">
+  <a href="/admin/chroniques{% if p.est_test %}?test=oui{% endif %}">← Chroniques</a>
+  · {{ p.prenom }} {{ p.nom }}
+</p>
+
+<h1 style="margin-top:0">{{ p.nom_fictif or p.prenom }}</h1>
+<p class="discret">
+  {{ p.prenom }} {{ p.nom }} · {{ p.peuple or "—" }} · {{ lieu_affiche }} ·
+  étage {{ p.etage }}
+  {% if p.est_test %} · <span class="vigilance">CHRONIQUE DE TEST</span>{% endif %}
+  {% if p.supprimee %} · <span class="alerte">MASQUÉE</span>{% endif %}
+  {% if p.est_marie %} · <span class="vigilance">MARIÉ·E — questionnaire
+    réduit, exclu·e du jeu de devinettes</span>{% endif %}
+</p>
+
+{# Les sous-onglets sont des LIENS, comme ceux du dessus et pour la même
+   raison : chaque écran a son adresse, donc se recharge, se met en signet et
+   se rouvre après une coupure. À 21 h, sur un téléphone dont l'écran s'est
+   verrouillé, un onglet qui vit en mémoire est un onglet qu'on a perdu.
+   Conséquence acceptée : on enregistre AVANT de changer d'onglet — d'où le
+   garde-fou en bas de page. #}
+<nav class="onglets sous-onglets">
+  {% for cle, titre in onglets %}
+    <a href="/admin/chronique/{{ p.uuid }}?onglet={{ cle }}"
+       class="onglet{% if cle == onglet %} actif{% endif %}">{{ titre }}{% if cle == "controle" and divergent %} •{% endif %}</a>
+  {% endfor %}
+</nav>
+
+{# L'état de la génération est visible depuis TOUS les onglets : on ne doit pas
+   avoir à retrouver où l'on a cliqué pour savoir si le Conseil répond. #}
+{% include "fragment_admin_etat.html" %}
+
+{% if onglet == "portrait" %}
+  {% if p.fuites_noms %}
+    {# EX-IA-13 — un nom réel sorti du modèle s'arbitre, il ne se corrige pas
+       en silence. #}
+    <div class="alerte"><strong>Fuite de noms à arbitrer :</strong>
+      {{ p.fuites_noms|join(", ") }}</div>
+  {% endif %}
+
+  <h2>Ce que l'invité voit</h2>
+  {% if not p.portrait %}
+    <p class="discret">Pas encore de portrait.</p>
+  {% else %}
+    <div class="parchemin">
+      {% for paragraphe in p.portrait.split("\n") if paragraphe.strip() %}
+        <p>{{ paragraphe }}</p>
+      {% endfor %}
+    </div>
+    {% if p.indice %}
+      <p class="discret"><strong>Indice :</strong> {{ p.indice }}</p>
+    {% endif %}
+  {% endif %}
+
+  <h2>Corriger le personnage</h2>
+  <form method="post" action="/admin/chronique/{{ p.uuid }}/modifier"
+        data-surveille>
+    <p><label>Nom fictif<br>
+      <input type="text" name="nom_fictif" value="{{ p.nom_fictif or '' }}"></label></p>
+    {# Liste close, comme le lieu : en texte libre une faute de frappe crée un
+       peuple qui n'existe pas — « naint » est arrivé en production. La liste
+       vient de `questions.yaml` (EX-QUE-12), même source que le prompt. #}
+    <p><label>Peuple<br>
+      <select name="peuple">
+        <option value="">— aucun —</option>
+        {% for nom_peuple in peuples %}
+          <option value="{{ nom_peuple }}"{% if nom_peuple == p.peuple %} selected{% endif %}>{{ nom_peuple }}</option>
+        {% endfor %}
+        {% if p.peuple and p.peuple not in peuples %}
+          {# Ce qui est en base ne disparaît pas en silence : marqué, pour se
+             corriger. L'effacer cacherait peut-être un défaut de génération. #}
+          <option value="{{ p.peuple }}" selected>{{ p.peuple }} — hors liste</option>
+        {% endif %}
+      </select></label></p>
+    {# Le lieu découpe les dix chapitres : son effectif est montré À CÔTÉ du
+       champ, sinon la conséquence ne se découvre qu'en octobre. #}
+    <p><label>Lieu<br>
+      <select name="lieu">
+        {% for code in codes_lieux %}
+          <option value="{{ code }}"{% if code == p.lieu %} selected{% endif %}>{{ libelle_lieu(code) }} — {{ effectifs.get(code, 0) }} convoqué(s)</option>
+        {% endfor %}
+      </select></label></p>
+    <p><label>Indice<br>
+      <input type="text" name="indice" value="{{ p.indice or '' }}"></label></p>
+    <p><label>Portrait<br>
+      <textarea name="portrait" rows="14">{{ p.portrait or '' }}</textarea></label></p>
+    <button class="action" type="submit">Enregistrer le personnage</button>
+  </form>
+
+{% elif onglet == "photo" %}
+  <h2>La photo</h2>
+  {% if photo is none %}
+    <p class="discret">Aucune photo déposée. {{ budget_photo.restants }} dépôt(s)
+       restant(s) sur {{ budget_photo.maximum }}.</p>
+  {% else %}
+    {# `?v=` sur TOUTES les adresses qui désignent un fichier, `img` comme `a` :
+       sans empreinte, l'URL est la même avant et après un remplacement et le
+       navigateur rend la précédente. Corrigé sur l'image le 27 août, les deux
+       liens avaient été oubliés — et l'en-tête de cache posé au même moment
+       aggravait l'oubli. #}
+    {% if photo.chemin_vignette %}
+      <img class="apercu-admin"
+           src="/admin/photo/{{ p.uuid }}/vignettes?v={{ photo.uuid[:12] }}"
+           alt="Photo de {{ p.prenom }}">
+    {% elif photo.etat == "traitement" %}
+      <p class="vigilance">Reçue, pas encore convertie — aucune vignette à
+         montrer. L'original est sur le volume.</p>
+    {% else %}
+      <p class="alerte">Conversion échouée. <strong>L'original est intact</strong>
+         sur le volume (EX-PHO-33), et le crédit a été rendu.</p>
+    {% endif %}
+    <p class="discret">
+      état <strong>{{ photo.etat }}</strong> ·
+      déposée le {{ heure_locale(photo.creee_le) }} ·
+      {{ budget_photo.consommes }} dépôt(s) sur {{ budget_photo.maximum }},
+      {{ budget_photo.restants }} restant(s)
+      {% if budget_photo.echecs %} · {{ budget_photo.echecs }} rendu(s) après échec{% endif %}
+    </p>
+    <p class="discret">
+      <a href="/admin/photo/{{ p.uuid }}/originaux?v={{ photo.uuid[:12] }}">Original</a>
+      {% if photo.chemin_web %} ·
+        <a href="/admin/photo/{{ p.uuid }}/web?v={{ photo.uuid[:12] }}">Version web</a>
+      {% endif %}
+    </p>
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data"
+        action="/admin/chronique/{{ p.uuid }}/photo">
+    {# EX-ADM-10 — l'administrateur dépose sans consommer, budget épuisé ou
+       non. Même fonction que l'invité : un second chemin de dépôt divergerait
+       au prochain changement de règle. #}
+    <label class="action sobre" style="display:inline-block">
+      {{ "Remplacer la photo" if photo else "Déposer une photo pour lui" }}
+      <input type="file" name="fichier" accept="image/*" hidden
+             onchange="this.form.submit()"></label>
+    {% if photo %}
+      <button class="action sobre" type="submit" name="action" value="retirer"
+              onclick="return confirm('Retirer la photo de {{ p.prenom }} ? Le fichier reste sur le volume, et cela ne lui coûte aucun changement.')">Retirer sa photo</button>
+    {% endif %}
+  </form>
+
+{% elif onglet == "questionnaire" %}
+  {% if divergent %}
+    <div class="alerte"><strong>Les réponses ont changé depuis le dernier
+       portrait.</strong> Voyez l'onglet Contrôle.</div>
+  {% endif %}
+  <h2>Ce qu'il a répondu</h2>
+  {% if not reponses %}
+    <p class="discret">Aucune réponse enregistrée.</p>
+  {% else %}
+    {# EX-GEN-08 — `reponses_json` est la seule vérité, et une réponse perdue
+       l'est pour toujours : champ par champ, jamais un JSON brut à recopier où
+       une accolade oubliée effacerait tout. #}
+    <form method="post" action="/admin/chronique/{{ p.uuid }}/reponses"
+          data-surveille>
+      <table class="grille">
+        <tbody>
+        {% for intitule, cle, valeur in reponses %}
+          <tr>
+            <th style="text-align:left;width:42%">{{ intitule }}
+              <br><code class="discret">{{ cle }}</code>
+              {% if cle in cles_hors_portrait %}
+                <br><span class="discret">— n'entre pas dans le portrait</span>
+              {% endif %}</th>
+            <td><textarea name="reponse__{{ cle }}" rows="2"
+                          style="width:100%">{{ valeur }}</textarea></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <button class="action sobre" type="submit">Enregistrer les réponses — sans régénérer</button>
+    </form>
+  {% endif %}
+
+{% elif onglet == "credits" %}
+  <h2>Ses crédits</h2>
+  {# Dérivés du journal : rien à décrémenter, on écrit une ligne et le compte
+     se refait. « Tout rendre » pose une BORNE datée, donc deux appuis donnent
+     le même résultat qu'un seul. #}
+  <p class="discret">
+    Photos : {{ budget_photo.consommes }} sur {{ budget_photo.maximum }}
+    ({{ budget_photo.restants }} restant(s)) ·
+    Portraits : {{ p.nb_generations }} sur {{ max_generations }} ·
+    {{ p.nb_tentatives }} tentative(s) technique(s)
+  </p>
+  {% for quoi, intitule in [("photo", "photo"), ("chronique", "portrait")] %}
+    <form method="post" action="/admin/chronique/{{ p.uuid }}/crediter"
+          style="display:inline">
+      <input type="hidden" name="quoi" value="{{ quoi }}">
+      <button class="action sobre" type="submit" name="portee" value="un">+1 {{ intitule }}</button>
+      <button class="action sobre" type="submit" name="portee" value="tout"
+              onclick="return confirm('Rendre TOUS les crédits de {{ intitule }} à {{ p.prenom }} ?')">Tout rendre</button>
+    </form>
+  {% endfor %}
+  <p class="discret" style="margin-top:1rem">Le garde-fou technique
+     ({{ p.nb_tentatives }} tentative(s)) n'est jamais rendu : il protège contre
+     une chronique qui rappellerait l'API en boucle, ce n'est pas une
+     courtoisie.</p>
+
+{% elif onglet == "controle" %}
+  <h2>Contrôle</h2>
+  {% if not divergent %}
+    <p class="quittance">Le portrait est en accord avec les réponses.</p>
+  {% else %}
+    <div class="alerte"><strong>Le portrait ne reflète plus les réponses.</strong>
+      Régénérez, ou corrigez le personnage à la main — les deux remettent en
+      accord.</div>
+    <table class="grille">
+      <thead><tr><th>Réponse</th><th>Avant</th><th>Après</th></tr></thead>
+      <tbody>
+      {% for e in ecarts %}
+        <tr>
+          <th style="text-align:left"><code>{{ e.cle }}</code>
+            <br><span class="discret">{{ e.quand }}</span></th>
+          <td class="retire">{{ e.avant or "—" }}</td>
+          <td class="ajoute">{{ e.apres or "—" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h2>Régénérer</h2>
+  <form method="post" action="/admin/chronique/{{ p.uuid }}/regenerer">
+    <p><label class="discret">Motif de reprise
+      <select name="motif">
+        <option value="">aucun</option>
+        {% for m in motifs %}
+          <option value="{{ m.cle }}">{{ m.libelle }}</option>
+        {% endfor %}
+      </select></label></p>
+    {# EX-ADM-10 — ni le quota de l'invité ni MAX_TENTATIVES ne s'y opposent :
+       un appui n'est pas une boucle. Seul `ia.plafond_appels` protège encore
+       la dépense, et lui n'est jamais levé. #}
+    <button class="action" type="submit">Régénérer — sans limite</button>
+  </form>
+
+{% elif onglet == "historique" %}
+  <h2>Historique</h2>
+  <p class="discret">Tout ce qui a touché cette chronique, sa personne et sa
+     photo. La création n'y figure pas : le journal commence au premier appel.</p>
+  {% if not journal %}
+    <p class="discret">Rien encore.</p>
+  {% else %}
+    {% for e in journal %}
+      <div class="entree-journal">
+        <p style="margin:0"><strong>{{ e.libelle }}</strong>
+          <span class="discret">— {{ e.quand }}{% if e.qui %} · {{ e.qui }}{% endif %}</span></p>
+        {% for cle, v in e.ecarts.items() %}
+          <p style="margin:0.3rem 0 0"><code class="discret">{{ cle }}</code><br>
+            <span class="retire">{{ v.avant or "—" }}</span><br>
+            <span class="ajoute">{{ v.apres or "—" }}</span></p>
+        {% endfor %}
+        {% if e.contexte %}
+          <p class="discret" style="margin:0.3rem 0 0">{% for cle, v in e.contexte.items() %}{{ cle }} : {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% endif %}
+
+{% elif onglet == "danger" %}
+  <h2>Zone de danger</h2>
+  <p class="discret">Rien n'est effacé ici. Les réponses — la seule chose qui ne
+     se réécrit pas — restent intactes quoi qu'il arrive (EX-GEN-03).</p>
+  {% if p.supprimee %}
+    <div class="alerte"><strong>Cette chronique est masquée.</strong>
+      Elle ne paraît ni sur la carte des mariés, ni dans les totaux.</div>
+    <form method="post" action="/admin/chronique/{{ p.uuid }}/supprimer">
+      <input type="hidden" name="action" value="restaurer">
+      <button class="action" type="submit">La remontrer</button>
+    </form>
+  {% else %}
+    <form method="post" action="/admin/chronique/{{ p.uuid }}/supprimer">
+      <button class="action peril" type="submit"
+              onclick="return confirm('Masquer la chronique de {{ p.prenom }} ? Elle disparaîtra de la carte et des totaux. Rien n est effacé : vous pourrez la remontrer.')">Masquer cette chronique</button>
+    </form>
+  {% endif %}
+{% endif %}
+
+<p class="discret" style="margin-top:2rem">
+  <a href="/admin/chronique/{{ p.uuid }}.json">Exporter cette chronique</a> ·
+  <a href="/portrait/{{ p.uuid }}">Voir comme l'invité</a>
+</p>
+
+<script>
+// Les sous-onglets étant des liens, changer d'onglet recharge la page : un
+// champ modifié et non enregistré serait perdu en silence. C'est le prix de
+// l'adresse par onglet, et voici ce qui le rend supportable.
+(function () {
+  var formulaires = document.querySelectorAll("form[data-surveille]");
+  var sale = false;
+  Array.prototype.forEach.call(formulaires, function (f) {
+    f.addEventListener("input", function () { sale = true; });
+    f.addEventListener("submit", function () { sale = false; });
+  });
+  if (formulaires.length) {
+    window.addEventListener("beforeunload", function (e) {
+      if (!sale) { return; }
+      e.preventDefault();
+      e.returnValue = "";
+    });
+  }
+})();
+</script>
+{% endblock %}

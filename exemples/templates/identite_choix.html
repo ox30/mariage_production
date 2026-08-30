@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block corps %}
+<div class="enveloppe">
+  <p class="surtitre">Le Livre des Convoqués</p>
+  <h1>Deux personnes portent ce nom</h1>
+  <p>{{ prenom }} {{ nom }} figure {{ candidates|length }} fois sur la liste.
+     Laquelle êtes-vous&nbsp;?</p>
+
+  {# EX-AUTH-05 — le coût d'un écran de confirmation en trop est un geste ;
+     celui d'une confusion est un invité qui voit le personnage d'un autre, et
+     un personnage de moins sur la carte. #}
+  {% for c in candidates %}
+    <form method="post" action="/identite/choisir" style="margin:0">
+      <input type="hidden" name="personne_uuid" value="{{ c.uuid }}">
+      <input type="hidden" name="intention" value="{{ intention }}">
+      <button type="submit" class="choix" style="width:100%;text-align:left">
+        {{ c.prenom }} {{ c.nom }}{% if c.table_nom %} — table {{ c.table_nom }}{% endif %}
+        <span class="discret" style="display:block;font-size:0.85em">
+          {% if c.a_une_chronique %}a déjà un personnage{% else %}n'a pas encore de personnage{% endif %}
+        </span>
+      </button>
+    </form>
+  {% endfor %}
+
+  <p class="discret" style="margin-top:1.2rem;text-align:center">
+    <a href="/identite?intention={{ intention }}">← Ce n'est aucune des deux</a>
+  </p>
+</div>
+{% endblock %}

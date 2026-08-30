@@ -1,10 +1,4 @@
 {% include "fragment_bandeau_gardien.html" %}
-{% if p.nb_generations >= max_generations %}
-  {# Budget de générations épuisé : c'est ici que l'invité n'a plus de recours
-     par lui-même. #}
-  {% set sujet_message = "son portrait" %}
-  {% include "fragment_message_chroniqueur.html" %}
-{% endif %}
 {% if p.etat == "brouillon" %}
   <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
   <h1>Il reste {{ nb_bonus_mot }} questions</h1>
@@ -133,6 +127,13 @@
     });
     </script>
   {% else %}
+    {# EX-GAL-04 — LA DERNIÈRE option, donc au dernier endroit. Placée en tête,
+       elle s'offrait avant même que l'invité ait lu son portrait : on ne
+       propose pas de réclamer à quelqu'un qui n'a pas encore vu ce qu'on lui a
+       écrit. Elle vient après le constat qu'il n'a plus rien, et après tout ce
+       qu'il peut encore faire lui-même. *Constaté en production le 30 août.* #}
     <p class="discret">Vous avez épuisé vos réécritures. Cette chronique est la vôtre.</p>
+    {% set sujet_message = "son portrait" %}
+    {% include "fragment_message_chroniqueur.html" %}
   {% endif %}
 {% endif %}

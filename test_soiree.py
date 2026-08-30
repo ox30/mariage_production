@@ -239,3 +239,94 @@ assert "elle est floue" in _texte(page)
 client.post("/admin/soiree", auth=ADMIN, data={"phase": "ouvert"})
 
 print("TOUT PASSE — les messages remontent au Chroniqueur, et se ferment avec le Livre")
+
+
+# --- la soupape est la DERNIÈRE option, pas la première ------------------ #
+
+# *Constaté en production le 30 août :* le bouton s'offrait en tête de page,
+# avant même que l'invité ait lu son portrait. On ne propose pas de réclamer à
+# quelqu'un qui n'a pas encore vu ce qu'on lui a écrit.
+
+assert bd.messages_de(muet.personne_uuid) == []
+place = client.get(f"/portrait/{muet.uuid}").text
+assert "Signaler au Grand Chroniqueur" in place
+assert place.index("Signaler au Grand Chroniqueur") > place.index(
+    "épuisé vos réécritures"), "la soupape passe avant le constat d'épuisement"
+assert place.index("Signaler au Grand Chroniqueur") > place.index(
+    "Un paragraphe."), "la soupape passe avant le portrait lui-même"
+
+print("TOUT PASSE — la soupape vient après le portrait et le constat")
+
+
+# --- le lien de l'administrateur mène à la chronique ACTUELLE ------------ #
+
+# *Constaté le 30 août :* il menait à une version antérieure, masquée. Trois
+# requêtes cherchaient « la chronique d'une personne », de trois façons, et
+# deux sans filtre ni ordre — SQLite rendait la plus ancienne.
+
+ancienne = _chronique("Ludivine")
+with bd.Seance() as seance:
+    personne_uuid = seance.get(Chronique, ancienne.uuid).personne_uuid
+bd.supprimer_chronique(ancienne.uuid)          # masquée
+
+import time as _time
+_time.sleep(0.01)                              # deux dates distinctes
+neuve = test_outils.creer_chronique(
+    "Ludivine", "Soirée", {"metier": "y", "allegeance": "La Lumière"},
+    main.CODES_LIEUX, etat="prete")
+with bd.Seance() as seance:
+    seance.get(Chronique, neuve).personne_uuid = personne_uuid
+    seance.commit()
+bd.enregistrer_portrait(neuve, {
+    "nom_fictif": "Ludivine la Neuve", "peuple": "elfe",
+    "portrait": "La version refaite.", "indice": "i", "fuites_noms": [],
+    "modele": "claude-sonnet-5", "duree_s": 5.0,
+    "jetons_entree": 800, "jetons_sortie": 250})
+
+# L'invité, lui, ne voit que la vivante — une masquée n'existe pas pour lui.
+assert bd.chronique_de_personne(personne_uuid) == neuve, \
+    "l'invité est renvoyé vers une version antérieure"
+
+with bd.Seance() as seance:
+    for _ in range(main.MAX_GENERATIONS):
+        bd.journaliser(seance, Journal.CHRONIQUE_GENEREE,
+                       objet_uuid=neuve, objet_type="chronique")
+    seance.commit()
+client.post(f"/message/{neuve}", data={"texte": "Deuxième essai raté."})
+
+courrier = client.get("/admin/soiree", auth=ADMIN).text
+assert f'href="/admin/chronique/{neuve}?onglet=portrait"' in courrier, \
+    "le message mène à une version antérieure"
+assert f'href="/admin/chronique/{ancienne.uuid}?onglet=portrait"' not in courrier
+
+# Et la liste des invités montre la même — masquée seulement s'il n'en reste
+# aucune de vivante.
+liste = client.get("/admin/invites?onglet=liste", auth=ADMIN).text
+assert f'href="/admin/chronique/{neuve}?onglet=portrait"' in liste
+assert f'/admin/chronique/{ancienne.uuid}?onglet=portrait' not in liste
+
+# **Deux chroniques vivantes n'existent pas**, et c'est la base qui le
+# garantit : `ux_chronique_personne` est un index unique PARTIEL, posé
+# `WHERE supprimee = 0`. Remontrer une masquée alors qu'une neuve existe lève
+# une `IntegrityError` — la règle est donc tenue par le schéma, pas par du code
+# qu'on pourrait oublier de relire.
+import sqlalchemy.exc as _exc
+try:
+    bd.supprimer_chronique(ancienne.uuid, supprimee=False)
+    raise AssertionError("deux chroniques vivantes ont été acceptées")
+except _exc.IntegrityError:
+    pass
+
+# Une personne dont la SEULE chronique est masquée doit rester visible, marquée
+# — sinon elle paraîtrait n'avoir jamais rien écrit.
+orpheline = _chronique("Maxime")
+bd.supprimer_chronique(orpheline.uuid)
+liste = client.get("/admin/invites?onglet=liste", auth=ADMIN).text
+assert f'href="/admin/chronique/{orpheline.uuid}?onglet=portrait"' in liste
+assert "masquée" in _texte(liste)
+# Mais pour l'invité, elle n'existe plus : il peut en écrire une neuve.
+with bd.Seance() as seance:
+    uuid_orphelin = seance.get(Chronique, orpheline.uuid).personne_uuid
+assert bd.chronique_de_personne(uuid_orphelin) is None
+
+print("TOUT PASSE — le lien mène à la chronique actuelle, jamais à l'ancienne")

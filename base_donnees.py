@@ -318,16 +318,47 @@ def creer(personne_uuid: str, reponses: dict, codes_lieux: list[str],
         return chronique.uuid
 
 
+def _chronique_de(seance: Session, personne_uuid: str,
+                  inclure_masquees: bool = False) -> Chronique | None:
+    """La chronique COURANTE d'une personne. Une seule règle, trois appelants.
+
+    **L'ordre n'est pas un détail.** Une personne peut en avoir plusieurs — une
+    masquée, puis une refaite. Sans `order_by`, SQLite rend celle qu'il veut, et
+    c'est presque toujours la plus ancienne : *constaté le 30 août, le lien d'un
+    message du Grand Chroniqueur menait à une version antérieure, masquée.* Il
+    y avait trois requêtes pour cette question, écrites de trois façons.
+
+    `inclure_masquees` sépare deux besoins qui se ressemblent. Pour l'invité,
+    une chronique masquée n'existe pas : il doit pouvoir en écrire une neuve.
+    Pour l'administrateur elle existe, et il faut la lui montrer — marquée —
+    sinon la personne paraîtrait n'avoir jamais rien écrit.
+    """
+    # L'`order_by` sur les vivantes est REDONDANT et gardé exprès :
+    # `ux_chronique_personne` est un index unique partiel posé
+    # `WHERE supprimee = 0`, donc il ne peut jamais y avoir qu'une seule ligne
+    # ici. Une mutation qui le retire ne fait rien tomber, et c'est le bon
+    # résultat. Sur les MASQUÉES en revanche il n'y a aucune contrainte, et
+    # c'est là que l'ordre compte vraiment.
+    vivante = seance.scalar(
+        select(Chronique)
+        .where(Chronique.personne_uuid == personne_uuid,
+               Chronique.supprimee.is_(False))
+        .order_by(Chronique.creee_le.desc()))
+    if vivante is not None or not inclure_masquees:
+        return vivante
+    return seance.scalar(
+        select(Chronique).where(Chronique.personne_uuid == personne_uuid)
+        .order_by(Chronique.creee_le.desc()))
+
+
 def chronique_de_personne(personne_uuid: str) -> str | None:
-    """L'identifiant de la chronique de cette personne, si elle en a une.
+    """L'identifiant de la chronique vivante de cette personne, s'il y en a une.
 
     Prend un uuid et non un nom : c'est ce qui distingue deux homonymes.
     """
     with Seance() as seance:
-        return seance.scalar(
-            select(Chronique.uuid).where(
-                Chronique.personne_uuid == personne_uuid,
-                Chronique.supprimee.is_(False)))
+        chronique = _chronique_de(seance, personne_uuid)
+        return None if chronique is None else chronique.uuid
 
 
 # --------------------------------------------------------------------------- #
@@ -1457,9 +1488,10 @@ def personnes_toutes() -> list[dict]:
         tables = {t.uuid: t for t in seance.scalars(select(TableGroupe))}
         lignes = []
         for personne in seance.scalars(select(Personne)):
-            chronique = seance.scalar(
-                select(Chronique).where(
-                    Chronique.personne_uuid == personne.uuid))
+            # Même règle que partout, masquées comprises : une personne dont
+            # la seule chronique est masquée paraîtrait n'avoir rien écrit.
+            chronique = _chronique_de(seance, personne.uuid,
+                                      inclure_masquees=True)
             table = tables.get(personne.table_uuid)
             lignes.append({
                 "uuid": personne.uuid, "prenom": personne.prenom,
@@ -1680,9 +1712,11 @@ def messages_au_chroniqueur() -> list[dict]:
             personne = seance.get(Personne, ligne.acteur_personne_uuid or "")
             chronique = None
             if personne is not None:
-                chronique = seance.scalar(
-                    select(Chronique.uuid).where(
-                        Chronique.personne_uuid == personne.uuid))
+                # Le lien doit mener à la chronique ACTUELLE. C'est par
+                # l'onglet Historique qu'on remonte aux versions antérieures.
+                courante = _chronique_de(seance, personne.uuid,
+                                         inclure_masquees=True)
+                chronique = None if courante is None else courante.uuid
             try:
                 details = json.loads(ligne.details_json or "{}")
             except ValueError:

@@ -2,7 +2,7 @@
 {% if p.etat == "brouillon" %}
   <p class="surtitre">{{ libelle_lieu(p.lieu) }}</p>
   <h1>Il reste {{ nb_bonus_mot }} questions</h1>
-  <p>Vos sept premières réponses sont enregistrées. Votre chronique s'écrira dès
+  <p>Vos premières réponses sont enregistrées. Votre chronique s'écrira dès
      que vous aurez terminé — ou tout de suite, si vous préférez.</p>
   <p class="discret">Le Conseil vous convoquera {{ locution_lieu(p.lieu) }}.</p>
   <a class="action" href="/bonus/{{ p.uuid }}/questions">Continuer</a>

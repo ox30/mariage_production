@@ -22,7 +22,7 @@
     {% for p in participations %}
       <article class="fiche">
         <p class="nom-fictif">{{ p.nom_fictif }}</p>
-        <p class="appartenance">{{ p.peuple }}{% if p.etage == 1 %} &middot; six réponses{% else %} &middot; douze réponses{% endif %}</p>
+        <p class="appartenance">{{ p.peuple }} &middot; {{ p.reponses|length }} réponses</p>
         <div class="texte-portrait">
           {% for paragraphe in p.portrait.split("\n") if paragraphe.strip() %}
             <p>{{ paragraphe }}</p>
